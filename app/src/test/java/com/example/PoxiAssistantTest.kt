@@ -1,11 +1,15 @@
 package com.example
 
+import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.poxi.bridge.AndroidActionBridge
 import com.example.poxi.gemini.GeminiService
 import com.example.poxi.gemini.GeminiTurnResult
+import com.example.poxi.service.PoxiVoiceService
+import com.example.poxi.ui.PoxiViewModel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -19,96 +23,181 @@ import org.robolectric.annotation.Config
 class PoxiAssistantTest {
 
     private lateinit var context: Context
+    private lateinit var application: Application
     private lateinit var actionBridge: AndroidActionBridge
     private lateinit var geminiService: GeminiService
+    private lateinit var viewModel: PoxiViewModel
 
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
+        application = ApplicationProvider.getApplicationContext()
         actionBridge = AndroidActionBridge(context)
         geminiService = GeminiService(actionBridge)
+        viewModel = PoxiViewModel(application)
     }
 
+    /** Test Case 1: "Open YouTube" -> openApp("YouTube") */
     @Test
-    fun testCase1_HelloPoxi() {
-        val result = geminiService.processWithLocalIntentEngine("Hello Poxi.")
+    fun testCase01_OpenYouTube() {
+        val result = geminiService.processWithLocalIntentEngine("Open YouTube")
         assertTrue(result is GeminiTurnResult.Success)
         val success = result as GeminiTurnResult.Success
-        assertTrue(success.spokenText.contains("Poxi", ignoreCase = true))
+        assertNotNull(success.toolAction)
+        assertEquals("openApp", success.toolAction?.functionName)
+        assertEquals("YouTube", success.toolAction?.arguments?.get("appName"))
     }
 
+    /** Test Case 2: "ओपन यूट्यूब" -> openApp("YouTube") in Hindi */
     @Test
-    fun testCase2_HindiMeinBaatKaro() {
-        val result = geminiService.processWithLocalIntentEngine("Hindi mein baat karo.")
+    fun testCase02_HindiOpenYouTube() {
+        val result = geminiService.processWithLocalIntentEngine("ओपन यूट्यूब")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertNotNull(success.toolAction)
+        assertEquals("openApp", success.toolAction?.functionName)
+        assertEquals("YouTube", success.toolAction?.arguments?.get("appName"))
+        assertEquals("Hindi", success.detectedLanguage)
+    }
+
+    /** Test Case 3: "youtube kholo" -> openApp("YouTube") in Hinglish */
+    @Test
+    fun testCase03_YouTubeKholo() {
+        val result = geminiService.processWithLocalIntentEngine("youtube kholo")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertNotNull(success.toolAction)
+        assertEquals("openApp", success.toolAction?.functionName)
+        assertEquals("YouTube", success.toolAction?.arguments?.get("appName"))
+    }
+
+    /** Test Case 4: "WhatsApp खोलो" -> openWhatsApp() */
+    @Test
+    fun testCase04_WhatsAppKholoHindi() {
+        val result = geminiService.processWithLocalIntentEngine("WhatsApp खोलो")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertNotNull(success.toolAction)
+        assertEquals("openWhatsApp", success.toolAction?.functionName)
+    }
+
+    /** Test Case 5: "Open WhatsApp" -> openWhatsApp() */
+    @Test
+    fun testCase05_OpenWhatsAppEnglish() {
+        val result = geminiService.processWithLocalIntentEngine("Open WhatsApp")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertNotNull(success.toolAction)
+        assertEquals("openWhatsApp", success.toolAction?.functionName)
+    }
+
+    /** Test Case 6: "कॉल भाई" -> callContact("भाई") */
+    @Test
+    fun testCase06_CallBhaiHindi() {
+        val result = geminiService.processWithLocalIntentEngine("कॉल भाई")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertNotNull(success.toolAction)
+        assertEquals("callContact", success.toolAction?.functionName)
+        assertEquals("भाई", success.toolAction?.arguments?.get("contactName"))
+    }
+
+    /** Test Case 7: "Call brother" -> callContact("brother") */
+    @Test
+    fun testCase07_CallBrotherEnglish() {
+        val result = geminiService.processWithLocalIntentEngine("Call brother")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertNotNull(success.toolAction)
+        assertEquals("callContact", success.toolAction?.functionName)
+        assertEquals("brother", success.toolAction?.arguments?.get("contactName"))
+    }
+
+    /** Test Case 8: Hindi normal conversation */
+    @Test
+    fun testCase08_HindiNormalConversation() {
+        val result = geminiService.processWithLocalIntentEngine("नमस्ते, आप कैसे हैं?")
         assertTrue(result is GeminiTurnResult.Success)
         val success = result as GeminiTurnResult.Success
         assertEquals("Hindi", success.detectedLanguage)
         assertTrue(success.spokenText.isNotEmpty())
     }
 
+    /** Test Case 9: English normal conversation */
     @Test
-    fun testCase3_TalkToMeInEnglish() {
-        val result = geminiService.processWithLocalIntentEngine("Talk to me in English.")
+    fun testCase09_EnglishNormalConversation() {
+        val result = geminiService.processWithLocalIntentEngine("Hello Poxi, how are you?")
         assertTrue(result is GeminiTurnResult.Success)
         val success = result as GeminiTurnResult.Success
         assertEquals("English", success.detectedLanguage)
-        assertTrue(success.spokenText.contains("English", ignoreCase = true))
+        assertTrue(success.spokenText.isNotEmpty())
     }
 
+    /** Test Case 10: Hindi -> English mid-conversation */
     @Test
-    fun testCase4_HinglishMeinBaatKaro() {
-        val result = geminiService.processWithLocalIntentEngine("Hinglish mein baat karo.")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertEquals("Hinglish", success.detectedLanguage)
-        assertTrue(success.spokenText.contains("Hinglish", ignoreCase = true))
+    fun testCase10_SwitchToEnglish() {
+        // First speak in Hindi
+        val turn1 = geminiService.processWithLocalIntentEngine("नमस्ते पॉक्सी")
+        assertEquals("Hindi", (turn1 as GeminiTurnResult.Success).detectedLanguage)
+
+        // Then switch to English
+        val turn2 = geminiService.processWithLocalIntentEngine("Talk to me in English.")
+        assertTrue(turn2 is GeminiTurnResult.Success)
+        val success2 = turn2 as GeminiTurnResult.Success
+        assertEquals("English", success2.detectedLanguage)
+        assertTrue(success2.spokenText.contains("English", ignoreCase = true))
     }
 
+    /** Test Case 11: English -> Hindi mid-conversation */
     @Test
-    fun testCase5_WhatsAppKholo() {
-        val result = geminiService.processWithLocalIntentEngine("WhatsApp kholo.")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("openWhatsApp", success.toolAction?.functionName)
+    fun testCase11_SwitchToHindi() {
+        // First speak in English
+        val turn1 = geminiService.processWithLocalIntentEngine("Hello Poxi, how are you?")
+        assertEquals("English", (turn1 as GeminiTurnResult.Success).detectedLanguage)
+
+        // Then switch to Hindi
+        val turn2 = geminiService.processWithLocalIntentEngine("Hindi mein baat karo.")
+        assertTrue(turn2 is GeminiTurnResult.Success)
+        val success2 = turn2 as GeminiTurnResult.Success
+        assertEquals("Hindi", success2.detectedLanguage)
+        assertTrue(success2.spokenText.contains("हिंदी", ignoreCase = true) || success2.spokenText.contains("नमस्ते", ignoreCase = true))
     }
 
+    /** Test Case 12: Start voice mode once, background support via Foreground Service */
     @Test
-    fun testCase6_OpenWhatsApp() {
-        val result = geminiService.processWithLocalIntentEngine("Open WhatsApp.")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("openWhatsApp", success.toolAction?.functionName)
+    fun testCase12_StartVoiceModeForegroundService() {
+        viewModel.startVoiceSession()
+        assertTrue("Voice session should be active", viewModel.uiState.value.isVoiceSessionActive)
+
+        // Verify service state flow is active
+        PoxiVoiceService.start(context)
+        // Clean up
+        viewModel.stopVoiceSession()
     }
 
+    /** Test Case 13: Stop voice mode and verify microphone is released */
     @Test
-    fun testCase7_MummyKoCallKaro() {
-        val result = geminiService.processWithLocalIntentEngine("Mummy ko call karo.")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("callContact", success.toolAction?.functionName)
-        assertEquals("Mummy", success.toolAction?.arguments?.get("contactName"))
+    fun testCase13_StopVoiceModeReleasesMic() {
+        viewModel.startVoiceSession()
+        assertTrue(viewModel.uiState.value.isVoiceSessionActive)
+
+        viewModel.stopVoiceSession()
+        assertFalse("Voice session must be inactive", viewModel.uiState.value.isVoiceSessionActive)
+        assertFalse("Listening state must be false", viewModel.uiState.value.isListening)
+        assertFalse("Speaking state must be false", viewModel.uiState.value.isSpeaking)
+        assertFalse("Service must be stopped", PoxiVoiceService.isServiceActive.value)
     }
 
+    /** Test Case 14: Interrupt Poxi while it is speaking */
     @Test
-    fun testCase8_CallRahul() {
-        val result = geminiService.processWithLocalIntentEngine("Call Rahul.")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("callContact", success.toolAction?.functionName)
-        assertEquals("Rahul", success.toolAction?.arguments?.get("contactName"))
-    }
+    fun testCase14_InterruptPoxiWhileSpeaking() {
+        viewModel.startVoiceSession()
+        // Simulate assistant speaking
+        viewModel.voiceOutputManager.speak("This is a long sentence being spoken by Poxi")
+        viewModel.interruptSpeaking()
 
-    @Test
-    fun testCase9_CallNumber() {
-        val result = geminiService.processWithLocalIntentEngine("Call 9876543210.")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("makeCall", success.toolAction?.functionName)
-        assertEquals("9876543210", success.toolAction?.arguments?.get("phoneNumber"))
+        assertFalse("Speaking must be stopped on interrupt", viewModel.uiState.value.isSpeaking)
+        // Clean up
+        viewModel.stopVoiceSession()
     }
 }

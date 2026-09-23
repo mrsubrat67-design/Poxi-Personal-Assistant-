@@ -22,6 +22,7 @@ class SpeechInputManager(private val context: Context) {
     var onListeningStarted: (() -> Unit)? = null
     var onListeningFinished: (() -> Unit)? = null
     var onError: ((String) -> Unit)? = null
+    var onSpeechTimeout: (() -> Unit)? = null
 
     var isListening: Boolean = false
         private set
@@ -31,6 +32,9 @@ class SpeechInputManager(private val context: Context) {
     }
 
     private fun initRecognizer() {
+        try {
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {}
         if (SpeechRecognizer.isRecognitionAvailable(context)) {
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
                 setRecognitionListener(createListener())
@@ -65,6 +69,18 @@ class SpeechInputManager(private val context: Context) {
             override fun onError(error: Int) {
                 isListening = false
                 onListeningFinished?.invoke()
+
+                if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) {
+                    // Re-init recognizer to clear stuck state
+                    initRecognizer()
+                }
+
+                if (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_NO_MATCH) {
+                    Log.d(TAG, "Speech timeout or no match - notifying continuous session")
+                    onSpeechTimeout?.invoke()
+                    return
+                }
+
                 val message = when (error) {
                     SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
                     SpeechRecognizer.ERROR_CLIENT -> "Client side error"

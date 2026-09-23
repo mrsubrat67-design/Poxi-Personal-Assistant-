@@ -128,16 +128,16 @@ class AndroidActionBridge(private val context: Context) {
         val cleanName = appName.trim().lowercase()
         return try {
             when {
-                cleanName.contains("whatsapp") -> executeOpenWhatsApp()
-                cleanName.contains("youtube") -> openYouTube()
-                cleanName.contains("instagram") -> openInstagram()
-                cleanName.contains("chrome") || cleanName.contains("browser") -> openChrome()
-                cleanName.contains("setting") -> openSettings()
-                cleanName.contains("camera") -> openCamera()
-                cleanName.contains("map") -> openMaps()
-                cleanName.contains("clock") || cleanName.contains("alarm") -> openClock()
-                cleanName.contains("contact") -> openContactsApp()
-                cleanName.contains("dial") || cleanName.contains("phone") -> openDialer()
+                cleanName.contains("whatsapp") || cleanName.contains("व्हाट्सएप") || cleanName.contains("वॉट्सएप") || cleanName.contains("व्हाट्सएप्प") -> executeOpenWhatsApp()
+                cleanName.contains("youtube") || cleanName.contains("यूट्यूब") || cleanName.contains("यू ट्यूब") -> openYouTube()
+                cleanName.contains("instagram") || cleanName.contains("insta") || cleanName.contains("इंस्टाग्राम") || cleanName.contains("इन्स्टाग्राम") -> openInstagram()
+                cleanName.contains("chrome") || cleanName.contains("browser") || cleanName.contains("क्रोम") || cleanName.contains("ब्राउज़र") -> openChrome()
+                cleanName.contains("setting") || cleanName.contains("सेटिंग") || cleanName.contains("सेटिंग्स") -> openSettings()
+                cleanName.contains("camera") || cleanName.contains("कैमरा") -> openCamera()
+                cleanName.contains("map") || cleanName.contains("मैप") || cleanName.contains("मैप्स") -> openMaps()
+                cleanName.contains("clock") || cleanName.contains("alarm") || cleanName.contains("घड़ी") || cleanName.contains("अलार्म") -> openClock()
+                cleanName.contains("contact") || cleanName.contains("संपर्क") || cleanName.contains("कॉन्टैक्ट्स") -> openContactsApp()
+                cleanName.contains("dial") || cleanName.contains("phone") || cleanName.contains("फोन") || cleanName.contains("डायलर") -> openDialer()
                 else -> launchAppByGeneralSearch(appName)
             }
         } catch (e: Exception) {
@@ -407,16 +407,16 @@ class AndroidActionBridge(private val context: Context) {
         val lower = input.lowercase()
         val queries = mutableListOf(input)
 
-        val momAliases = listOf("mom", "mummy", "mother", "maa", "mataji", "ammi")
-        val dadAliases = listOf("dad", "papa", "father", "pitaji", "abbu")
-        val brotherAliases = listOf("brother", "bro", "bhai", "bhaiya")
-        val sisterAliases = listOf("sister", "sis", "behen", "didi")
+        val momAliases = listOf("mom", "mummy", "mother", "maa", "mataji", "ammi", "माँ", "मम्मी", "माताजी", "माता")
+        val dadAliases = listOf("dad", "papa", "father", "pitaji", "abbu", "पापा", "पिताजी", "पिता")
+        val brotherAliases = listOf("brother", "bro", "bhai", "bhaiya", "भाई", "भैया", "भाया")
+        val sisterAliases = listOf("sister", "sis", "behen", "didi", "दीदी", "बहन")
 
         when {
-            momAliases.any { lower.contains(it) } -> queries.addAll(listOf("Mom", "Mummy", "Mother", "Maa"))
-            dadAliases.any { lower.contains(it) } -> queries.addAll(listOf("Dad", "Papa", "Father"))
-            brotherAliases.any { lower.contains(it) } -> queries.addAll(listOf("Bhai", "Bhaiya", "Brother"))
-            sisterAliases.any { lower.contains(it) } -> queries.addAll(listOf("Didi", "Behen", "Sister"))
+            momAliases.any { lower.contains(it) } -> queries.addAll(listOf("Mom", "Mummy", "Mother", "Maa", "मम्मी", "माँ"))
+            dadAliases.any { lower.contains(it) } -> queries.addAll(listOf("Dad", "Papa", "Father", "पापा", "पिताजी"))
+            brotherAliases.any { lower.contains(it) } -> queries.addAll(listOf("Bhai", "Bhaiya", "Brother", "भाई", "भैया"))
+            sisterAliases.any { lower.contains(it) } -> queries.addAll(listOf("Didi", "Behen", "Sister", "दीदी", "बहन"))
         }
 
         return queries.distinct()

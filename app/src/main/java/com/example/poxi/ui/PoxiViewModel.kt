@@ -18,6 +18,8 @@ import com.example.poxi.model.ChatMessage
 import com.example.poxi.model.ContactItem
 import com.example.poxi.model.MessageRole
 import com.example.poxi.model.ToolActionInfo
+import com.example.poxi.service.PoxiVoiceService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +31,7 @@ data class PoxiUiState(
     val isListening: Boolean = false,
     val isSpeaking: Boolean = false,
     val isProcessing: Boolean = false,
+    val isVoiceSessionActive: Boolean = false,
     val audioAmplitude: Float = 0f,
     val currentSpokenText: String? = null,
     val lastExecutedAction: ToolActionInfo? = null,
@@ -76,7 +79,16 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         voiceOutputManager.onSpeakingFinished = {
-            _uiState.update { it.copy(isSpeaking = false, statusMessage = "Ready for next voice command") }
+            _uiState.update { it.copy(isSpeaking = false, statusMessage = "Listening for your reply...") }
+            // Continuous session: auto-listen after Poxi finishes speaking
+            if (_uiState.value.isVoiceSessionActive) {
+                viewModelScope.launch {
+                    delay(350)
+                    if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
+                        speechInputManager.startListening()
+                    }
+                }
+            }
         }
 
         voiceOutputManager.audioPlayer.onAmplitudeUpdated = { amp ->
@@ -97,6 +109,18 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(isListening = false) }
         }
 
+        speechInputManager.onSpeechTimeout = {
+            // Keep session active on pause/silence: re-arm recognizer
+            if (_uiState.value.isVoiceSessionActive) {
+                viewModelScope.launch {
+                    delay(250)
+                    if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
+                        speechInputManager.startListening()
+                    }
+                }
+            }
+        }
+
         speechInputManager.onRmsChanged = { rms ->
             if (_uiState.value.isListening) {
                 _uiState.update { it.copy(audioAmplitude = rms) }
@@ -114,6 +138,11 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
                     statusMessage = errorMsg
                 )
             }
+        }
+
+        // Notification stop button trigger
+        PoxiVoiceService.onStopActionTriggered = {
+            stopVoiceSession()
         }
 
         // Add welcome message
@@ -140,28 +169,69 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleListening() {
         if (_uiState.value.isSpeaking) {
-            // Test Case 10: Interrupt Poxi while speaking
+            // Interrupt Poxi while speaking
             interruptSpeaking()
+            return
         }
 
-        if (_uiState.value.isListening) {
-            speechInputManager.stopListening()
-            _uiState.update { it.copy(isListening = false, statusMessage = "Ready") }
+        if (_uiState.value.isVoiceSessionActive) {
+            stopVoiceSession()
         } else {
-            speechInputManager.startListening()
+            startVoiceSession()
         }
     }
 
     /**
-     * Test Case 10: Immediately silences Poxi when user interrupts.
+     * Starts continuous voice session with Android Foreground Service.
+     */
+    fun startVoiceSession() {
+        _uiState.update {
+            it.copy(
+                isVoiceSessionActive = true,
+                statusMessage = "Starting voice mode..."
+            )
+        }
+        PoxiVoiceService.start(context)
+        speechInputManager.startListening()
+    }
+
+    /**
+     * Stops continuous voice session, stops speech recognizer, halts audio playback,
+     * and terminates the Foreground Service.
+     */
+    fun stopVoiceSession() {
+        _uiState.update {
+            it.copy(
+                isVoiceSessionActive = false,
+                isListening = false,
+                isSpeaking = false,
+                audioAmplitude = 0f,
+                statusMessage = "Voice session stopped • Tap mic to start"
+            )
+        }
+        speechInputManager.stopListening()
+        voiceOutputManager.stop()
+        PoxiVoiceService.stop(context)
+    }
+
+    /**
+     * Immediately silences Poxi when user interrupts, and immediately re-arms the mic if session is active.
      */
     fun interruptSpeaking() {
         voiceOutputManager.stop()
         _uiState.update {
             it.copy(
                 isSpeaking = false,
-                statusMessage = "Interrupted — Ready for your next command"
+                statusMessage = "Interrupted — Listening for your command..."
             )
+        }
+        if (_uiState.value.isVoiceSessionActive) {
+            viewModelScope.launch {
+                delay(200)
+                if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking) {
+                    speechInputManager.startListening()
+                }
+            }
         }
     }
 
@@ -270,6 +340,7 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        stopVoiceSession()
         speechInputManager.destroy()
         voiceOutputManager.shutdown()
     }

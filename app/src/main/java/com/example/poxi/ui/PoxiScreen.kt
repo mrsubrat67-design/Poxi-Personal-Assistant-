@@ -96,13 +96,15 @@ fun PoxiScreen(
     }
 
     LaunchedEffect(Unit) {
-        permissionsLauncher.launch(
-            arrayOf(
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.READ_CONTACTS,
-                Manifest.permission.CALL_PHONE
-            )
+        val permissions = mutableListOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE
         )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        permissionsLauncher.launch(permissions.toTypedArray())
     }
 
     // Scroll to bottom on new messages
