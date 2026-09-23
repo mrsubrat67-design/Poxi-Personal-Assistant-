@@ -2,12 +2,11 @@ package com.example.poxi.gemini
 
 import android.util.Base64
 import android.util.Log
+import com.example.poxi.audio.LanguageDetector
+import com.example.poxi.audio.VoiceLogger
 import com.example.poxi.bridge.AndroidActionBridge
-import com.example.poxi.bridge.BridgeResult
 import com.example.poxi.bridge.CallContactOutcome
-import com.example.poxi.model.ChatMessage
 import com.example.poxi.model.ContactItem
-import com.example.poxi.model.MessageRole
 import com.example.poxi.model.ToolActionInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -39,6 +38,7 @@ class GeminiService(
         private const val TAG = "GeminiService"
         private const val PRIMARY_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
         private const val FALLBACK_MODEL = "gemini-2.5-flash"
+        private const val UNIFIED_VOICE_NAME = "Aoede" // Warm, expressive multilingual voice
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -55,6 +55,7 @@ class GeminiService(
 
     fun resetConversation() {
         conversationHistory.clear()
+        VoiceLogger.logGeminiSessionState("SESSION_RESET")
     }
 
     private fun getSystemInstruction(): JSONObject {
@@ -64,29 +65,38 @@ class GeminiService(
                     put("text", """
                         You are Poxi, an intelligent, cheerful, and fast voice AI assistant for Android.
                         
-                        CRITICAL MULTI-LANGUAGE RULES:
-                        - You natively understand and speak multiple languages, including English, Hindi (हिंदी), Hinglish (conversational Hindi-English blend like 'Haan bilkul, main abhi WhatsApp open kar deta hoon'), Marathi (मराठी), Gujarati (ગુજરાતી), Bengali (বাংলা), Tamil (தமிழ்), Telugu (తెలుగు), Kannada (ಕನ್ನಡ), Malayalam (മലയാളം), Punjabi (ਪੰਜਾਬੀ), and Urdu (اردو).
-                        - AUTOMATICALLY DETECT the language of the user's speech and respond in that EXACT same language and natural accent.
-                        - If the user speaks Hindi, respond in fluent, natural Hindi.
-                        - If the user speaks English, respond in fluent, modern English.
-                        - If the user speaks Hinglish (e.g. 'WhatsApp kholo', 'Mummy ko call karo', 'Kaise ho Poxi?'), respond naturally in warm conversational Hinglish.
-                        - If the user switches languages mid-conversation (e.g. 'Hindi mein bolo' or 'Switch to English'), immediately switch your response language to match.
-                        - Keep spoken voice responses concise, warm, natural, and friendly (1-2 short sentences) since this is a real-time voice conversation.
+                        CRITICAL LANGUAGE-AWARE RESPONSE RULES:
+                        1. Hindi input → Hindi response.
+                           Example: User: "यूट्यूब खोलो" → Poxi: "ठीक है, YouTube खोल रहा हूँ।"
+                        2. English input → English response.
+                           Example: User: "Open YouTube." → Poxi: "Okay, opening YouTube."
+                        3. Hinglish input → natural Hinglish response.
+                           Example: User: "YouTube kholo." → Poxi: "Okay, YouTube open kar raha hoon."
+                        4. Mixed Hindi + English input:
+                           Do NOT force-translate English product/app/action words into awkward Hindi. Keep common English words (YouTube, WhatsApp, video, open, play, call) naturally.
+                           Example: User: "YouTube open karo aur ye video chalao." → Poxi: "Okay, YouTube open kar raha hoon aur video play karta hoon."
+                        5. If user switches from Hindi to English, immediately respond in English.
+                        6. If user switches from English to Hindi, immediately respond in Hindi.
+                        7. If user speaks Hinglish, preserve the natural Hinglish style.
+                        8. NEVER announce language detection (DO NOT say "I detected Hindi", "Switching to English", etc.).
+                        9. DO NOT randomly switch languages.
+                        10. DO NOT translate the user's sentence unless requested.
+                        11. Keep spoken voice responses concise, warm, natural, and friendly (1 short sentence) suitable for instant voice playback.
+                        12. Use the same consistent voice for all responses.
                         
                         DEVICE ACTION & TOOL CALLING RULES:
-                        - When the user asks to open an app, make a phone call, or search contacts in ANY language (English, Hindi, Hinglish, Marathi, etc.), you MUST ALWAYS call the appropriate tool. NEVER merely say you will do it or describe it in text without invoking the tool.
-                        - CRITICAL ACTION DISPATCH: Commands like "Open YouTube", "ओपन यूट्यूब", "यूट्यूब खोलो", "youtube kholo", "WhatsApp खोलो", "व्हाट्सएप खोलो", "Open WhatsApp", "कॉल भाई", "भाई को कॉल करो", "Call brother", "Mummy ko call karo" MUST invoke their respective tool immediately.
+                        - When user asks to open an app, make a call, or search contacts in ANY language (English, Hindi, Hinglish, Marathi, etc.), you MUST ALWAYS call the appropriate tool.
+                        - Commands like "Open YouTube", "यूट्यूब खोलो", "youtube kholo", "WhatsApp kholo", "व्हाट्सएप खोलो", "कॉल भाई", "Mummy ko call karo", "Call Rahul" MUST invoke their respective tool immediately.
                         - Tools available:
-                          1. openWhatsApp(): Opens WhatsApp. Call for "WhatsApp kholo", "Open WhatsApp", "व्हाट्सएप खोलो", "WhatsApp open karo", "WhatsApp chalao", etc.
+                          1. openWhatsApp(): Opens WhatsApp.
                           2. openApp(appName): Opens apps like YouTube, Instagram, Chrome, Settings, Camera, Maps, etc. Always pass canonical English name (e.g. "YouTube", "Instagram", "Chrome", "Settings", "Camera", "Maps").
-                          3. makeCall(phoneNumber): Calls a specific phone number like "Call 9876543210".
-                          4. callContact(contactName): Calls a contact by name or relationship like "Call Mom", "Mummy ko call karo", "कॉल भाई", "भाई को कॉल करो", "Call brother", "Call Rahul", "Rahul ko phone lagao".
+                          3. makeCall(phoneNumber): Calls a specific phone number.
+                          4. callContact(contactName): Calls a contact by name or relationship (e.g. "Mom", "Mummy", "Rahul", "Dad", "brother", "भाई").
                           5. openUrl(url): Opens a web link.
                         - When you receive the tool execution response:
-                          - If the action succeeded: confirm verbally in the user's language (e.g., Hinglish: "WhatsApp khol diya hai!", Hindi: "व्हाट्सएप खोल दिया है!", English: "Opening WhatsApp now!").
+                          - If the action succeeded: confirm verbally in the user's language matching the rules above.
                           - If multiple contacts were found: politely ask the user which one they would like to call.
                           - If contact was not found: politely inform the user that the contact was not found.
-                          - If app is not installed: inform the user gently.
                     """.trimIndent())
                 })
             })
@@ -100,17 +110,17 @@ class GeminiService(
         // 1. openWhatsApp
         functionDeclarations.put(JSONObject().apply {
             put("name", "openWhatsApp")
-            put("description", "Opens WhatsApp on the Android device. Call when user wants to open WhatsApp (e.g. 'Open WhatsApp', 'WhatsApp kholo', 'WhatsApp open karo', 'WhatsApp chalao').")
+            put("description", "Opens WhatsApp on the Android device. Call when user wants to open WhatsApp (e.g. 'Open WhatsApp', 'WhatsApp kholo', 'WhatsApp open karo', 'WhatsApp chalao', 'व्हाट्सएप खोलो').")
             put("parameters", JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
                     put("phoneNumber", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "Optional contact phone number to open direct chat.")
+                        put("description", "Optional contact phone number.")
                     })
                     put("message", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "Optional message to pre-fill in chat.")
+                        put("description", "Optional message to pre-fill.")
                     })
                 })
             })
@@ -135,7 +145,7 @@ class GeminiService(
         // 3. makeCall
         functionDeclarations.put(JSONObject().apply {
             put("name", "makeCall")
-            put("description", "Dials or initiates a phone call to a given numeric phone number. Call when user provides a specific number (e.g. 'Call 9876543210').")
+            put("description", "Dials or initiates a phone call to a given numeric phone number (e.g. 'Call 9876543210').")
             put("parameters", JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
@@ -151,13 +161,13 @@ class GeminiService(
         // 4. callContact
         functionDeclarations.put(JSONObject().apply {
             put("name", "callContact")
-            put("description", "Searches device contacts by name or relationship and initiates a call (e.g. 'Call Mom', 'Mummy ko call karo', 'Call Rahul', 'Call Dad').")
+            put("description", "Searches device contacts by name or relationship and initiates a call (e.g. 'Call Mom', 'Mummy ko call karo', 'Call Rahul', 'कॉल भाई').")
             put("parameters", JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
                     put("contactName", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "The name or relationship of the person to call (e.g. 'Mom', 'Mummy', 'Rahul', 'Dad', 'Priya').")
+                        put("description", "The name or relationship of the person to call (e.g. 'Mom', 'Mummy', 'Rahul', 'Dad', 'brother').")
                     })
                 })
                 put("required", JSONArray().apply { put("contactName") })
@@ -191,13 +201,17 @@ class GeminiService(
         userInput: String,
         apiKey: String
     ): GeminiTurnResult = withContext(Dispatchers.IO) {
-        // If API key is empty or invalid, fallback to on-device intent parser
+        val detectedType = LanguageDetector.detect(userInput)
+        val detectedLang = detectedType.label
+        VoiceLogger.logLanguageDetected(detectedLang)
+
+        // If API key is empty or placeholder, fallback to on-device intent parser
         if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
-            return@withContext processWithLocalIntentEngine(userInput)
+            return@withContext processWithLocalIntentEngine(userInput, detectedType)
         }
 
         try {
-            Log.d(TAG, "LIVE SESSION CREATED: model=$PRIMARY_MODEL, historySize=${conversationHistory.size}")
+            VoiceLogger.logGeminiSessionState("LIVE_TURN_START")
 
             // Append user message to history
             val userContent = JSONObject().apply {
@@ -208,7 +222,7 @@ class GeminiService(
             }
             conversationHistory.add(userContent)
 
-            // Send request to Gemini
+            // Send request to Gemini Live model
             val firstResponse = callGeminiApi(apiKey, PRIMARY_MODEL)
 
             // Parse response
@@ -246,20 +260,14 @@ class GeminiService(
                 val args = functionCallObj.optJSONObject("args") ?: JSONObject()
 
                 Log.d(TAG, "TOOL CALL RECEIVED: name=$functionName")
-                Log.d(TAG, "TOOL NAME: $functionName")
-                Log.d(TAG, "TOOL ARGUMENTS: [keys=${args.keys().asSequence().toList()}]")
-
-                // Save assistant's functionCall turn to history
                 if (content != null) {
                     conversationHistory.add(content)
                 }
 
-                Log.d(TAG, "ANDROID ACTION STARTED: $functionName")
                 // Execute action via Android Action Bridge
                 val executionResult = executeBridgeAction(functionName, args)
-                Log.d(TAG, "ANDROID ACTION RESULT: success=${executionResult.toolAction.success}, summary=${executionResult.toolAction.summary}")
 
-                // Send tool result back to Gemini so it continues speaking naturally
+                // Send tool result back to Gemini so it confirms speech naturally
                 val toolResponseContent = JSONObject().apply {
                     put("role", "tool")
                     put("parts", JSONArray().apply {
@@ -276,7 +284,6 @@ class GeminiService(
                     })
                 }
                 conversationHistory.add(toolResponseContent)
-                Log.d(TAG, "TOOL RESULT SENT TO GEMINI: name=$functionName, success=${executionResult.toolAction.success}")
 
                 // Second call to Gemini to generate the spoken voice response
                 val secondResponse = callGeminiApi(apiKey, PRIMARY_MODEL)
@@ -312,29 +319,34 @@ class GeminiService(
                     conversationHistory.add(secondContent)
                 }
 
+                VoiceLogger.logResponseLanguage(detectedLang)
+                VoiceLogger.logGeminiSessionState("LIVE_TURN_COMPLETE")
+
                 GeminiTurnResult.Success(
                     spokenText = finalText.trim(),
                     audioBytes = finalAudio ?: audioBytes,
-                    detectedLanguage = detectLanguage(userInput),
+                    detectedLanguage = detectedLang,
                     toolAction = executionResult.toolAction,
                     pendingContacts = executionResult.pendingContacts
                 )
             } else {
-                // Normal conversational response without tool
+                // Conversational response without tool
                 if (content != null) {
                     conversationHistory.add(content)
                 }
 
+                VoiceLogger.logResponseLanguage(detectedLang)
+                VoiceLogger.logGeminiSessionState("LIVE_TURN_COMPLETE")
+
                 GeminiTurnResult.Success(
                     spokenText = initialText ?: "I didn't quite catch that.",
                     audioBytes = audioBytes,
-                    detectedLanguage = detectLanguage(userInput)
+                    detectedLanguage = detectedLang
                 )
             }
         } catch (e: Exception) {
             Log.e(TAG, "Gemini API request failed, falling back to local engine", e)
-            // Fallback gracefully so assistant never breaks
-            processWithLocalIntentEngine(userInput)
+            processWithLocalIntentEngine(userInput, detectedType)
         }
     }
 
@@ -417,7 +429,7 @@ class GeminiService(
                                 functionName = functionName,
                                 arguments = argsMap,
                                 success = true,
-                                summary = "Found ${outcome.matches.size} contacts matching '$contactName'.",
+                                summary = "Found multiple contacts for '$contactName'",
                                 detail = outcome.matches.joinToString { "${it.name} (${it.phoneNumber})" },
                                 appOrTarget = contactName
                             ),
@@ -431,7 +443,6 @@ class GeminiService(
                                 arguments = argsMap,
                                 success = false,
                                 summary = outcome.message,
-                                detail = "No match found",
                                 appOrTarget = contactName
                             )
                         )
@@ -443,7 +454,6 @@ class GeminiService(
                                 arguments = argsMap,
                                 success = false,
                                 summary = outcome.message,
-                                detail = "Contacts permission needed",
                                 appOrTarget = contactName
                             )
                         )
@@ -487,7 +497,6 @@ class GeminiService(
             put("tools", getToolDeclarations())
             put("generationConfig", JSONObject().apply {
                 put("temperature", 0.7)
-                // Request both TEXT and AUDIO modalities
                 put("responseModalities", JSONArray().apply {
                     put("TEXT")
                     put("AUDIO")
@@ -495,7 +504,7 @@ class GeminiService(
                 put("speechConfig", JSONObject().apply {
                     put("voiceConfig", JSONObject().apply {
                         put("prebuiltVoiceConfig", JSONObject().apply {
-                            put("voiceName", "Puck")
+                            put("voiceName", UNIFIED_VOICE_NAME)
                         })
                     })
                 })
@@ -511,7 +520,6 @@ class GeminiService(
         val responseBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
-            // If primary model failed (e.g. native audio model unavailable on key), try text-only fallback
             if (model == PRIMARY_MODEL) {
                 return callGeminiApiFallback(apiKey, FALLBACK_MODEL)
             }
@@ -549,33 +557,41 @@ class GeminiService(
     }
 
     /**
-     * Local robust NLU intent engine: recognizes all required variations even without network or API key,
-     * ensuring Poxi NEVER fails the test cases under any environment.
+     * Local robust NLU intent engine: accurately matches user requests in Hindi, English, and Hinglish,
+     * ensuring natural wording adhering to the language-aware response guidelines.
      */
-    fun processWithLocalIntentEngine(input: String): GeminiTurnResult {
+    fun processWithLocalIntentEngine(
+        input: String,
+        explicitType: LanguageDetector.LanguageType? = null
+    ): GeminiTurnResult {
         val lower = input.trim().lowercase()
-        val lang = detectLanguage(input)
+        val langType = explicitType ?: LanguageDetector.detect(input)
+        val lang = langType.label
+
+        VoiceLogger.logLanguageDetected(lang)
+        VoiceLogger.logResponseLanguage(lang)
 
         // 1. WhatsApp variations:
-        // "WhatsApp kholo", "WhatsApp खोलो", "व्हाट्सएप खोलो", "Open WhatsApp", "whatsapp kholo", "WhatsApp open karo", "WhatsApp chalao", "WhatsApp खोल दो"
         val isWhatsApp = lower.contains("whatsapp") ||
                 lower.contains("व्हाट्सएप") ||
                 lower.contains("वॉट्सएप") ||
                 lower.contains("व्हाट्सएप्प") ||
                 lower.contains("व्हाट्सऐप")
+
+        val openVerbs = listOf(
+            "open", "launch", "start",
+            "kholo", "khol", "khol do", "chalao", "start karo", "open karo", "chala do",
+            "ओपन", "खोलो", "खोल", "खोल दो", "चलाओ", "शुरू करो", "स्टार्ट", "चला दो"
+        )
+
         if (isWhatsApp) {
             Log.d(TAG, "TOOL CALL RECEIVED: name=openWhatsApp")
-            Log.d(TAG, "TOOL NAME: openWhatsApp")
-            Log.d(TAG, "TOOL ARGUMENTS: []")
-            Log.d(TAG, "ANDROID ACTION STARTED: openWhatsApp")
             val res = actionBridge.executeOpenWhatsApp()
-            Log.d(TAG, "ANDROID ACTION RESULT: success=${res.success}, summary=${res.summary}")
-            Log.d(TAG, "TOOL RESULT SENT TO GEMINI: name=openWhatsApp, success=${res.success}")
 
-            val spoken = when (lang) {
-                "Hindi" -> "व्हाट्सएप खोल दिया है।"
-                "Hinglish" -> "WhatsApp open kar diya hai!"
-                else -> "Opening WhatsApp for you."
+            val spoken = when (langType) {
+                LanguageDetector.LanguageType.HINDI -> "ठीक है, WhatsApp खोल रहा हूँ।"
+                LanguageDetector.LanguageType.HINGLISH -> "Okay, WhatsApp open kar raha hoon."
+                else -> "Okay, opening WhatsApp."
             }
             return GeminiTurnResult.Success(
                 spokenText = spoken,
@@ -592,7 +608,6 @@ class GeminiService(
         }
 
         // 2. Call number variations:
-        // "Call 9876543210", "Phone karo 9876543210", "9876543210 पर कॉल करो"
         val phoneRegex = Regex("""(\+?\d[\d\s-]{7,15}\d)""")
         val phoneMatch = phoneRegex.find(input)
         val isCallTrigger = lower.contains("call") || lower.contains("phone") || lower.contains("dial") ||
@@ -600,16 +615,11 @@ class GeminiService(
         if (phoneMatch != null && isCallTrigger) {
             val number = phoneMatch.value
             Log.d(TAG, "TOOL CALL RECEIVED: name=makeCall")
-            Log.d(TAG, "TOOL NAME: makeCall")
-            Log.d(TAG, "TOOL ARGUMENTS: [phoneNumber]")
-            Log.d(TAG, "ANDROID ACTION STARTED: makeCall")
             val res = actionBridge.executeMakeCall(number)
-            Log.d(TAG, "ANDROID ACTION RESULT: success=${res.success}, summary=${res.summary}")
-            Log.d(TAG, "TOOL RESULT SENT TO GEMINI: name=makeCall, success=${res.success}")
 
-            val spoken = when (lang) {
-                "Hindi" -> "$number पर कॉल लगाया जा रहा है।"
-                "Hinglish" -> "$number par call lagaya ja raha hai."
+            val spoken = when (langType) {
+                LanguageDetector.LanguageType.HINDI -> "ठीक है, $number पर कॉल लगाया जा रहा है।"
+                LanguageDetector.LanguageType.HINGLISH -> "Okay, $number par call laga raha hoon."
                 else -> "Calling $number now."
             }
             return GeminiTurnResult.Success(
@@ -626,8 +636,32 @@ class GeminiService(
             )
         }
 
-        // 3. App Launching variations (Devanagari, Hinglish & English):
-        // "Open YouTube", "ओपन यूट्यूब", "youtube kholo", "यूट्यूब खोलो", "YouTube खोल दो", "यूट्यूब चलाओ", "Open Instagram", "Open Chrome"
+        // 3. Mixed Hindi + English specific actions:
+        // E.g.: "YouTube open karo aur ye video chalao."
+        if (lower.contains("youtube") && (lower.contains("video") || lower.contains("chalao") || lower.contains("play"))) {
+            Log.d(TAG, "TOOL CALL RECEIVED: name=openApp (YouTube)")
+            val res = actionBridge.executeOpenApp("YouTube")
+            val spoken = if (langType == LanguageDetector.LanguageType.HINDI) {
+                "ठीक है, YouTube खोल रहा हूँ और वीडियो चला रहा हूँ।"
+            } else if (langType == LanguageDetector.LanguageType.HINGLISH) {
+                "Okay, YouTube open kar raha hoon aur video play karta hoon."
+            } else {
+                "Okay, opening YouTube and playing the video."
+            }
+            return GeminiTurnResult.Success(
+                spokenText = spoken,
+                detectedLanguage = lang,
+                toolAction = ToolActionInfo(
+                    functionName = "openApp",
+                    arguments = mapOf("appName" to "YouTube"),
+                    success = res.success,
+                    summary = res.summary,
+                    appOrTarget = "YouTube"
+                )
+            )
+        }
+
+        // 4. App Launching variations:
         data class AppTarget(val canonicalName: String, val patterns: List<String>)
         val supportedApps = listOf(
             AppTarget("YouTube", listOf("youtube", "यूट्यूब", "यू ट्यूब")),
@@ -640,28 +674,18 @@ class GeminiService(
             AppTarget("Calculator", listOf("calculator", "कैलकुलेटर")),
             AppTarget("Contacts", listOf("contacts", "contact", "संपर्क", "कॉन्टैक्ट्स"))
         )
-        val openVerbs = listOf(
-            "open", "launch", "start",
-            "kholo", "khol", "khol do", "chalao", "start karo", "open karo", "chala do",
-            "ओपन", "खोलो", "खोल", "खोल दो", "चलाओ", "शुरू करो", "स्टार्ट", "चला दो"
-        )
 
         for (app in supportedApps) {
             val matchesApp = app.patterns.any { lower.contains(it) }
-            val hasOpenVerb = openVerbs.any { lower.contains(it) }
+            val hasOpenVerb = openVerbs.any { lower.contains(it) } || lower == app.canonicalName.lowercase()
             if (matchesApp && hasOpenVerb) {
-                Log.d(TAG, "TOOL CALL RECEIVED: name=openApp")
-                Log.d(TAG, "TOOL NAME: openApp")
-                Log.d(TAG, "TOOL ARGUMENTS: [appName]")
-                Log.d(TAG, "ANDROID ACTION STARTED: openApp (${app.canonicalName})")
+                Log.d(TAG, "TOOL CALL RECEIVED: name=openApp (${app.canonicalName})")
                 val res = actionBridge.executeOpenApp(app.canonicalName)
-                Log.d(TAG, "ANDROID ACTION RESULT: success=${res.success}, summary=${res.summary}")
-                Log.d(TAG, "TOOL RESULT SENT TO GEMINI: name=openApp, success=${res.success}")
 
-                val spoken = when (lang) {
-                    "Hindi" -> "${app.canonicalName} खोल दिया गया है।"
-                    "Hinglish" -> "${app.canonicalName} open kar diya hai!"
-                    else -> "Opening ${app.canonicalName}."
+                val spoken = when (langType) {
+                    LanguageDetector.LanguageType.HINDI -> "ठीक है, ${app.canonicalName} खोल रहा हूँ।"
+                    LanguageDetector.LanguageType.HINGLISH -> "Okay, ${app.canonicalName} open kar raha hoon."
+                    else -> "Okay, opening ${app.canonicalName}."
                 }
                 return GeminiTurnResult.Success(
                     spokenText = spoken,
@@ -677,8 +701,7 @@ class GeminiService(
             }
         }
 
-        // 4. Call Contact variations (Devanagari, Hinglish & English):
-        // "कॉल भाई", "भाई को कॉल करो", "भाई को फोन करो", "Call brother", "Call Mom", "Mummy ko call karo", "मम्मी को कॉल करो", "Call Rahul"
+        // 5. Call Contact variations:
         val callContactKeywords = listOf(
             "call", "phone lagao", "call karo", "phone karo", "ko call", "ko phone", "call lagao", "laga do", "lagao", "dial",
             "कॉल", "फोन", "डायल", "फोन लगाओ", "कॉल करो", "फोन करो", "कॉल लगाओ", "को कॉल", "को फोन", "लगा दो"
@@ -686,19 +709,14 @@ class GeminiService(
         if (callContactKeywords.any { lower.contains(it) }) {
             val extractedName = extractContactNameFromPhrase(input)
             if (extractedName.isNotBlank()) {
-                Log.d(TAG, "TOOL CALL RECEIVED: name=callContact")
-                Log.d(TAG, "TOOL NAME: callContact")
-                Log.d(TAG, "TOOL ARGUMENTS: [contactName]")
-                Log.d(TAG, "ANDROID ACTION STARTED: callContact ($extractedName)")
+                Log.d(TAG, "TOOL CALL RECEIVED: name=callContact ($extractedName)")
                 val outcome = actionBridge.executeCallContact(extractedName)
 
                 return when (outcome) {
                     is CallContactOutcome.SingleMatch -> {
-                        Log.d(TAG, "ANDROID ACTION RESULT: success=true, single match found")
-                        Log.d(TAG, "TOOL RESULT SENT TO GEMINI: name=callContact, success=true")
-                        val spoken = when (lang) {
-                            "Hindi" -> "${outcome.contact.name} को कॉल लगाया जा रहा है।"
-                            "Hinglish" -> "${outcome.contact.name} ko call lagaya ja raha hai."
+                        val spoken = when (langType) {
+                            LanguageDetector.LanguageType.HINDI -> "ठीक है, ${outcome.contact.name} को कॉल लगाया जा रहा है।"
+                            LanguageDetector.LanguageType.HINGLISH -> "Okay, ${outcome.contact.name} ko call lagaya ja raha hai."
                             else -> "Calling ${outcome.contact.name}."
                         }
                         GeminiTurnResult.Success(
@@ -715,13 +733,11 @@ class GeminiService(
                         )
                     }
                     is CallContactOutcome.MultipleMatches -> {
-                        Log.d(TAG, "ANDROID ACTION RESULT: multiple matches (${outcome.matches.size})")
-                        Log.d(TAG, "TOOL RESULT SENT TO GEMINI: name=callContact, status=disambiguation")
                         val names = outcome.matches.joinToString(" and ") { it.name }
-                        val spoken = when (lang) {
-                            "Hindi" -> "मुझे '$extractedName' नाम के ${outcome.matches.size} संपर्क मिले: $names। आप किसे कॉल करना चाहते हैं?"
-                            "Hinglish" -> "Mujhe '$extractedName' ke ${outcome.matches.size} contacts mile: $names. Aap kise call karna chahte hain?"
-                            else -> "I found ${outcome.matches.size} contacts for '$extractedName': $names. Which one should I call?"
+                        val spoken = when (langType) {
+                            LanguageDetector.LanguageType.HINDI -> "मुझे '$extractedName' के लिए ${outcome.matches.size} संपर्क मिले: $names। आप किसे कॉल करना चाहते हैं?"
+                            LanguageDetector.LanguageType.HINGLISH -> "Mujhe '$extractedName' ke ${outcome.matches.size} contacts mile: $names. Aap kise call karna chahte hain?"
+                            else -> "I found ${outcome.matches.size} contacts for '$extractedName': $names. Which one would you like to call?"
                         }
                         GeminiTurnResult.Success(
                             spokenText = spoken,
@@ -738,11 +754,9 @@ class GeminiService(
                         )
                     }
                     is CallContactOutcome.NotFound -> {
-                        Log.d(TAG, "ANDROID ACTION RESULT: not found ($extractedName)")
-                        Log.d(TAG, "TOOL RESULT SENT TO GEMINI: name=callContact, status=not_found")
-                        val spoken = when (lang) {
-                            "Hindi" -> "'$extractedName' नाम का कोई संपर्क नहीं मिला।"
-                            "Hinglish" -> "'$extractedName' naam ka koi contact nahi mila."
+                        val spoken = when (langType) {
+                            LanguageDetector.LanguageType.HINDI -> "'$extractedName' नाम का कोई संपर्क नहीं मिला।"
+                            LanguageDetector.LanguageType.HINGLISH -> "'$extractedName' naam ka koi contact nahi mila."
                             else -> "I couldn't find any contact named '$extractedName'."
                         }
                         GeminiTurnResult.Success(
@@ -758,9 +772,13 @@ class GeminiService(
                         )
                     }
                     is CallContactOutcome.PermissionDenied -> {
-                        Log.d(TAG, "ANDROID ACTION RESULT: permission denied")
+                        val spoken = when (langType) {
+                            LanguageDetector.LanguageType.HINDI -> "संपर्क कॉल करने के लिए कृपया परमिशन दें।"
+                            LanguageDetector.LanguageType.HINGLISH -> "Contacts call karne ke liye please permission allow karein."
+                            else -> "Please allow contacts permission so I can make calls for you."
+                        }
                         GeminiTurnResult.Success(
-                            spokenText = "Please allow contacts permission so I can call contacts for you.",
+                            spokenText = spoken,
                             detectedLanguage = lang,
                             toolAction = ToolActionInfo(
                                 functionName = "callContact",
@@ -775,30 +793,25 @@ class GeminiService(
             }
         }
 
-        // 5. Language switch requests & greetings:
-        if (lower.contains("hindi mein") || lower.contains("hindi me") || lower.contains("talk in hindi") || lower.contains("हिंदी में बात करो") || lower.contains("हिंदी में बोलो")) {
+        // 6. Natural Language Conversational Responses:
+        // Greetings & General Questions
+        if (lower.contains("नमस्ते") || lower.contains("आप कैसे हैं") || lower.contains("क्या हाल है")) {
             return GeminiTurnResult.Success(
-                spokenText = "नमस्ते! मैं अब से आपसे हिंदी में बात करूँगा। मैं आपकी क्या मदद कर सकता हूँ?",
+                spokenText = "नमस्ते! मैं बिल्कुल ठीक हूँ। बताइए, आज मैं आपकी क्या मदद करूँ?",
                 detectedLanguage = "Hindi"
             )
         }
-        if (lower.contains("hinglish mein") || lower.contains("hinglish me") || lower.contains("talk in hinglish")) {
+        if (lower.contains("kaise ho") || lower.contains("kya haal hai") || lower.contains("kya chal raha hai")) {
             return GeminiTurnResult.Success(
-                spokenText = "Haan bilkul! Ab hum Hinglish mein baat karenge. Batao main aapki kya help karoon?",
+                spokenText = "Main bilkul badhiya hoon! Aap bataiye, aaj kya karna hai?",
                 detectedLanguage = "Hinglish"
             )
         }
-        if (lower.contains("talk to me in english") || lower.contains("speak in english") || lower.contains("in english") || lower.contains("अंग्रेजी में बोलो") || lower.contains("इंग्लिश में बात करो")) {
-            return GeminiTurnResult.Success(
-                spokenText = "Sure! I am now speaking in English. How can I help you today?",
-                detectedLanguage = "English"
-            )
-        }
-        if (lower.contains("hello poxi") || lower.contains("hi poxi") || lower == "hello" || lower == "hi" || lower == "hello!" || lower == "hi!") {
-            val spoken = when (lang) {
-                "Hindi" -> "नमस्ते! मैं पॉक्सी हूँ, आपका वॉइस असिस्टेंट। आप मुझसे कुछ भी पूछ सकते हैं या कोई भी ऐप खोलने को कह सकते हैं।"
-                "Hinglish" -> "Hello! Main hoon Poxi, aapka voice assistant. Bataiye aaj kya karna hai?"
-                else -> "Hello! I am Poxi, your voice assistant. How can I help you today?"
+        if (lower.contains("how are you") || lower.contains("what's up") || lower.contains("hello") || lower.contains("hi")) {
+            val spoken = when (langType) {
+                LanguageDetector.LanguageType.HINDI -> "नमस्ते! मैं पॉक्सी हूँ। मैं आपकी क्या मदद कर सकता हूँ?"
+                LanguageDetector.LanguageType.HINGLISH -> "Hello! Main Poxi hoon. Bataiye main aapki kya help karoon?"
+                else -> "Hello! I'm Poxi. How can I help you today?"
             }
             return GeminiTurnResult.Success(
                 spokenText = spoken,
@@ -806,34 +819,15 @@ class GeminiService(
             )
         }
 
-        // 6. Normal conversation handling (Hindi, English, Hinglish)
-        if (lower.contains("नमस्ते") || lower.contains("आप कैसे हैं") || lower.contains("क्या हाल है")) {
-            return GeminiTurnResult.Success(
-                spokenText = "नमस्ते! मैं बिल्कुल ठीक हूँ। आप कैसे हैं? मैं आपकी क्या मदद कर सकता हूँ?",
-                detectedLanguage = "Hindi"
-            )
-        }
-        if (lower.contains("how are you") || lower.contains("what can you do")) {
-            val spoken = when (lang) {
-                "Hindi" -> "मैं आपकी सहायता करने के लिए तैयार हूँ। आप मुझे यूट्यूब, व्हाट्सएप खोलने या कॉल करने के लिए कह सकते हैं।"
-                "Hinglish" -> "Main bilkul badhiya hoon! Aap mujhse YouTube, WhatsApp open karne ya calls lagane ke liye bol sakte hain."
-                else -> "I'm doing great! I can open apps like YouTube and WhatsApp, call your contacts, or chat in multiple languages."
-            }
-            return GeminiTurnResult.Success(
-                spokenText = spoken,
-                detectedLanguage = lang
-            )
-        }
-
-        // Default conversational response
-        val response = when (lang) {
-            "Hindi" -> "मैंने आपकी बात सुनी: \"$input\"। आप मुझसे व्हाट्सएप खोलने, यूट्यूब शुरू करने, या कॉल लगाने के लिए कह सकते हैं।"
-            "Hinglish" -> "Maine suna: \"$input\". Aap mujhse koi bhi app open karne ya kisi ko call lagane ke liye bol sakte hain."
-            else -> "I heard you say: \"$input\". You can ask me to open apps like WhatsApp, YouTube, call contacts, or make phone calls."
+        // Default conversational acknowledgement strictly in user's detected language:
+        val defaultResponse = when (langType) {
+            LanguageDetector.LanguageType.HINDI -> "मैंने आपकी बात समझ ली है। आप मुझसे कोई भी ऐप खोलने या कॉल करने को कह सकते हैं।"
+            LanguageDetector.LanguageType.HINGLISH -> "Maine aapki baat samajh li. Aap mujhse koi bhi app open karne ya call lagane ko bol sakte hain."
+            else -> "I understand. You can ask me to open apps like YouTube, WhatsApp, or make calls."
         }
 
         return GeminiTurnResult.Success(
-            spokenText = response,
+            spokenText = defaultResponse,
             detectedLanguage = lang
         )
     }
@@ -843,7 +837,6 @@ class GeminiService(
         val lower = clean.lowercase()
 
         // 1. Check Hindi/Hinglish patterns:
-        // "भाई को कॉल करो", "भाई को फोन करो", "Mummy ko call karo", "Rahul ko call karo"
         val koPattern = Regex("""^(.*?)\s*(?:ko|par|को|पर)\s*(?:call|phone|कॉल|फोन)\s*(?:karo|lagao|karna|laga do|करो|लगाओ|लगा दो)?$""", RegexOption.IGNORE_CASE)
         val koMatch = koPattern.find(clean)
         if (koMatch != null) {
@@ -878,26 +871,5 @@ class GeminiService(
         }
 
         return clean.replace(Regex("""^(my|the|मेरे|मेरी)\s+""", RegexOption.IGNORE_CASE), "").trim()
-    }
-
-    private fun detectLanguage(text: String): String {
-        val lower = text.lowercase()
-        val isDevanagari = text.any { it in '\u0900'..'\u097F' }
-        if (isDevanagari) return "Hindi"
-
-        val hinglishTokens = listOf(
-            "kholo", "karo", "karta", "hai", "hain", "hoon", "aap", "tum", "mera", "meri",
-            "kaise", "batao", "chal", "chalao", "lagao", "baat", "shukriya", "theek", "mein", "ko", "mummy", "papa", "bhai"
-        )
-        if (hinglishTokens.any { lower.contains(it) }) {
-            return "Hinglish"
-        }
-
-        if (lower.contains("marathi") || lower.contains("kasa") || lower.contains("aahe")) return "Marathi"
-        if (lower.contains("tamil") || lower.contains("vanakkam")) return "Tamil"
-        if (lower.contains("telugu") || lower.contains("namaskaram")) return "Telugu"
-        if (lower.contains("bengali") || lower.contains("kemon")) return "Bengali"
-
-        return "English"
     }
 }

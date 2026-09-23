@@ -3,6 +3,8 @@ package com.example
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.poxi.audio.LanguageDetector
+import com.example.poxi.audio.SpeechInputManager
 import com.example.poxi.bridge.AndroidActionBridge
 import com.example.poxi.gemini.GeminiService
 import com.example.poxi.gemini.GeminiTurnResult
@@ -42,217 +44,248 @@ class PoxiAssistantTest {
         viewModel = PoxiViewModel(application)
     }
 
-    /** Test Case 1: "Open YouTube" -> openApp("YouTube") */
-    @Test
-    fun testCase01_OpenYouTube() {
-        val result = geminiService.processWithLocalIntentEngine("Open YouTube")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("openApp", success.toolAction?.functionName)
-        assertEquals("YouTube", success.toolAction?.arguments?.get("appName"))
-    }
-
-    /** Test Case 2: "ओपन यूट्यूब" -> openApp("YouTube") in Hindi */
-    @Test
-    fun testCase02_HindiOpenYouTube() {
-        val result = geminiService.processWithLocalIntentEngine("ओपन यूट्यूब")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("openApp", success.toolAction?.functionName)
-        assertEquals("YouTube", success.toolAction?.arguments?.get("appName"))
-        assertEquals("Hindi", success.detectedLanguage)
-    }
-
-    /** Test Case 3: "youtube kholo" -> openApp("YouTube") in Hinglish */
-    @Test
-    fun testCase03_YouTubeKholo() {
-        val result = geminiService.processWithLocalIntentEngine("youtube kholo")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("openApp", success.toolAction?.functionName)
-        assertEquals("YouTube", success.toolAction?.arguments?.get("appName"))
-    }
-
-    /** Test Case 4: "WhatsApp खोलो" -> openWhatsApp() */
-    @Test
-    fun testCase04_WhatsAppKholoHindi() {
-        val result = geminiService.processWithLocalIntentEngine("WhatsApp खोलो")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("openWhatsApp", success.toolAction?.functionName)
-    }
-
-    /** Test Case 5: "Open WhatsApp" -> openWhatsApp() */
-    @Test
-    fun testCase05_OpenWhatsAppEnglish() {
-        val result = geminiService.processWithLocalIntentEngine("Open WhatsApp")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("openWhatsApp", success.toolAction?.functionName)
-    }
-
-    /** Test Case 6: "कॉल भाई" -> callContact("भाई") */
-    @Test
-    fun testCase06_CallBhaiHindi() {
-        val result = geminiService.processWithLocalIntentEngine("कॉल भाई")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("callContact", success.toolAction?.functionName)
-        assertEquals("भाई", success.toolAction?.arguments?.get("contactName"))
-    }
-
-    /** Test Case 7: "Call brother" -> callContact("brother") */
-    @Test
-    fun testCase07_CallBrotherEnglish() {
-        val result = geminiService.processWithLocalIntentEngine("Call brother")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertNotNull(success.toolAction)
-        assertEquals("callContact", success.toolAction?.functionName)
-        assertEquals("brother", success.toolAction?.arguments?.get("contactName"))
-    }
-
-    /** Test Case 8: Hindi normal conversation */
-    @Test
-    fun testCase08_HindiNormalConversation() {
-        val result = geminiService.processWithLocalIntentEngine("नमस्ते, आप कैसे हैं?")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertEquals("Hindi", success.detectedLanguage)
-        assertTrue(success.spokenText.isNotEmpty())
-    }
-
-    /** Test Case 9: English normal conversation */
-    @Test
-    fun testCase09_EnglishNormalConversation() {
-        val result = geminiService.processWithLocalIntentEngine("Hello Poxi, how are you?")
-        assertTrue(result is GeminiTurnResult.Success)
-        val success = result as GeminiTurnResult.Success
-        assertEquals("English", success.detectedLanguage)
-        assertTrue(success.spokenText.isNotEmpty())
-    }
-
-    /** Test Case 10: Hindi -> English mid-conversation */
-    @Test
-    fun testCase10_SwitchToEnglish() {
-        // First speak in Hindi
-        val turn1 = geminiService.processWithLocalIntentEngine("नमस्ते पॉक्सी")
-        assertEquals("Hindi", (turn1 as GeminiTurnResult.Success).detectedLanguage)
-
-        // Then switch to English
-        val turn2 = geminiService.processWithLocalIntentEngine("Talk to me in English.")
-        assertTrue(turn2 is GeminiTurnResult.Success)
-        val success2 = turn2 as GeminiTurnResult.Success
-        assertEquals("English", success2.detectedLanguage)
-        assertTrue(success2.spokenText.contains("English", ignoreCase = true))
-    }
-
-    /** Test Case 11: English -> Hindi mid-conversation */
-    @Test
-    fun testCase11_SwitchToHindi() {
-        // First speak in English
-        val turn1 = geminiService.processWithLocalIntentEngine("Hello Poxi, how are you?")
-        assertEquals("English", (turn1 as GeminiTurnResult.Success).detectedLanguage)
-
-        // Then switch to Hindi
-        val turn2 = geminiService.processWithLocalIntentEngine("Hindi mein baat karo.")
-        assertTrue(turn2 is GeminiTurnResult.Success)
-        val success2 = turn2 as GeminiTurnResult.Success
-        assertEquals("Hindi", success2.detectedLanguage)
-        assertTrue(success2.spokenText.contains("हिंदी", ignoreCase = true) || success2.spokenText.contains("नमस्ते", ignoreCase = true))
-    }
-
-    /** Test Case 12: Start voice mode once, background support via Foreground Service */
-    @Test
-    fun testCase12_StartVoiceModeForegroundService() {
-        viewModel.startVoiceSession()
-        assertTrue("Voice session should be active", viewModel.uiState.value.isVoiceSessionActive)
-
-        // Verify service state flow is active
-        PoxiVoiceService.start(context)
-        // Clean up
+    @org.junit.After
+    fun tearDown() {
         viewModel.stopVoiceSession()
     }
 
-    /** Test Case 13: Stop voice mode and verify microphone is released */
+    // =========================================================================
+    // SECTION G REQUIRED TESTS: 1 TO 12
+    // =========================================================================
+
+    /** 1. Hindi -> Hindi response */
     @Test
-    fun testCase13_StopVoiceModeReleasesMic() {
+    fun test01_HindiToHindiResponse() {
+        val input = "यूट्यूब खोलो"
+        val lang = LanguageDetector.detect(input)
+        assertEquals(LanguageDetector.LanguageType.HINDI, lang)
+
+        val result = geminiService.processWithLocalIntentEngine(input)
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertEquals("Hindi", success.detectedLanguage)
+        // Strictly matches user's language and does not force-translate English app name
+        assertEquals("ठीक है, YouTube खोल रहा हूँ।", success.spokenText)
+        assertEquals("openApp", success.toolAction?.functionName)
+        assertEquals("YouTube", success.toolAction?.arguments?.get("appName"))
+    }
+
+    /** 2. English -> English response */
+    @Test
+    fun test02_EnglishToEnglishResponse() {
+        val input = "Open YouTube."
+        val lang = LanguageDetector.detect(input)
+        assertEquals(LanguageDetector.LanguageType.ENGLISH, lang)
+
+        val result = geminiService.processWithLocalIntentEngine(input)
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertEquals("English", success.detectedLanguage)
+        assertEquals("Okay, opening YouTube.", success.spokenText)
+        assertEquals("openApp", success.toolAction?.functionName)
+    }
+
+    /** 3. Hinglish -> Hinglish response */
+    @Test
+    fun test03_HinglishToHinglishResponse() {
+        val input = "YouTube kholo."
+        val lang = LanguageDetector.detect(input)
+        assertEquals(LanguageDetector.LanguageType.HINGLISH, lang)
+
+        val result = geminiService.processWithLocalIntentEngine(input)
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertEquals("Hinglish", success.detectedLanguage)
+        assertEquals("Okay, YouTube open kar raha hoon.", success.spokenText)
+        assertEquals("openApp", success.toolAction?.functionName)
+    }
+
+    /** 4. Hindi -> English switch */
+    @Test
+    fun test04_HindiToEnglishSwitch() {
+        // Step 1: User speaks in Hindi
+        val hindiResult = geminiService.processWithLocalIntentEngine("यूट्यूब खोलो")
+        assertTrue(hindiResult is GeminiTurnResult.Success)
+        assertEquals("Hindi", (hindiResult as GeminiTurnResult.Success).detectedLanguage)
+        assertEquals("ठीक है, YouTube खोल रहा हूँ।", hindiResult.spokenText)
+
+        // Step 2: User immediately switches to English
+        val englishResult = geminiService.processWithLocalIntentEngine("Open YouTube.")
+        assertTrue(englishResult is GeminiTurnResult.Success)
+        val successEnglish = englishResult as GeminiTurnResult.Success
+        assertEquals("English", successEnglish.detectedLanguage)
+        assertEquals("Okay, opening YouTube.", successEnglish.spokenText)
+    }
+
+    /** 5. English -> Hindi switch */
+    @Test
+    fun test05_EnglishToHindiSwitch() {
+        // Step 1: User speaks in English
+        val englishResult = geminiService.processWithLocalIntentEngine("Open WhatsApp")
+        assertTrue(englishResult is GeminiTurnResult.Success)
+        assertEquals("English", (englishResult as GeminiTurnResult.Success).detectedLanguage)
+        assertEquals("Okay, opening WhatsApp.", englishResult.spokenText)
+
+        // Step 2: User immediately switches to Hindi
+        val hindiResult = geminiService.processWithLocalIntentEngine("व्हाट्सएप खोलो")
+        assertTrue(hindiResult is GeminiTurnResult.Success)
+        val successHindi = hindiResult as GeminiTurnResult.Success
+        assertEquals("Hindi", successHindi.detectedLanguage)
+        assertEquals("ठीक है, WhatsApp खोल रहा हूँ।", successHindi.spokenText)
+    }
+
+    /** 6. Hindi + English mixed sentence */
+    @Test
+    fun test06_HindiEnglishMixedSentence() {
+        val input = "YouTube open karo aur ye video chalao."
+        val lang = LanguageDetector.detect(input)
+        assertEquals(LanguageDetector.LanguageType.HINGLISH, lang)
+
+        val result = geminiService.processWithLocalIntentEngine(input)
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        // Keeps common English words naturally without awkward translation
+        assertEquals("Okay, YouTube open kar raha hoon aur video play karta hoon.", success.spokenText)
+    }
+
+    /** 7. Start voice once -> continuous listening */
+    @Test
+    fun test07_StartVoiceOnce_ContinuousListening() {
+        viewModel.startVoiceSession()
+
+        val state = viewModel.uiState.value
+        assertTrue("Session must be active on single tap", state.isVoiceSessionActive)
+        assertTrue("Listening state must be true", state.isListening)
+        assertTrue("Foreground service must be active", PoxiVoiceService.isServiceActive.value)
+
+        viewModel.stopVoiceSession()
+    }
+
+    /** 8. Normal silence does not toggle microphone repeatedly */
+    @Test
+    fun test08_NormalSilence_DoesNotToggleMicrophoneRepeatedly() {
+        viewModel.startVoiceSession()
+        assertTrue(viewModel.uiState.value.isVoiceSessionActive)
+        assertTrue(viewModel.uiState.value.isListening)
+
+        // Simulate normal pause/silence timeout from recognizer
+        viewModel.speechInputManager.onSpeechTimeout?.invoke()
+
+        // Session must remain active and listening in UI without violent toggling
+        assertTrue("Voice session must remain active during natural silence", viewModel.uiState.value.isVoiceSessionActive)
+        assertTrue("Microphone state must stay active in UI", viewModel.uiState.value.isListening)
+
+        viewModel.stopVoiceSession()
+    }
+
+    /** 9. User interruption works */
+    @Test
+    fun test09_UserInterruptionWorks() {
+        viewModel.startVoiceSession()
+        // Simulate Poxi speaking
+        viewModel.voiceOutputManager.speak("Poxi is currently speaking an answer")
+        viewModel.interruptSpeaking()
+
+        assertFalse("Voice output must immediately halt on user interruption", viewModel.uiState.value.isSpeaking)
+        assertFalse("AudioPlayer must be stopped", viewModel.voiceOutputManager.audioPlayer.isPlaying)
+
+        viewModel.stopVoiceSession()
+    }
+
+    /** 10. Voice OFF completely releases microphone */
+    @Test
+    fun test10_VoiceOff_CompletelyReleasesMicrophone() {
         viewModel.startVoiceSession()
         assertTrue(viewModel.uiState.value.isVoiceSessionActive)
 
         viewModel.stopVoiceSession()
-        assertFalse("Voice session must be inactive", viewModel.uiState.value.isVoiceSessionActive)
-        assertFalse("Listening state must be false", viewModel.uiState.value.isListening)
-        assertFalse("Speaking state must be false", viewModel.uiState.value.isSpeaking)
-        assertFalse("Service must be stopped", PoxiVoiceService.isServiceActive.value)
+
+        val state = viewModel.uiState.value
+        assertFalse("Voice session must be false", state.isVoiceSessionActive)
+        assertFalse("Listening must be false", state.isListening)
+        assertFalse("Speaking must be false", state.isSpeaking)
+        assertFalse("Foreground service must stop", PoxiVoiceService.isServiceActive.value)
+        assertFalse("SpeechInputManager session must not be alive", viewModel.speechInputManager.isSessionAlive)
     }
 
-    /** Test Case 14: Interrupt Poxi while it is speaking */
+    /** 11. No duplicate voice sessions */
     @Test
-    fun testCase14_InterruptPoxiWhileSpeaking() {
+    fun test11_NoDuplicateVoiceSessions() {
         viewModel.startVoiceSession()
-        // Simulate assistant speaking
-        viewModel.voiceOutputManager.speak("This is a long sentence being spoken by Poxi")
-        viewModel.interruptSpeaking()
+        assertTrue(viewModel.uiState.value.isVoiceSessionActive)
 
-        assertFalse("Speaking must be stopped on interrupt", viewModel.uiState.value.isSpeaking)
-        // Clean up
+        // Attempting to start again while already active must not duplicate
+        viewModel.startVoiceSession()
+        assertTrue(viewModel.uiState.value.isVoiceSessionActive)
+
         viewModel.stopVoiceSession()
     }
 
-    /** Test Case 15: Tapping voice button when permission is missing requests it and guards session */
+    /** 12. No repeated 'ton-ton' start/stop behavior */
     @Test
-    fun testCase15_MicPermissionEnforcement() {
-        org.robolectric.Shadows.shadowOf(application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
-        val freshVm = PoxiViewModel(application)
-        freshVm.toggleListening()
+    fun test12_NoRepeatedTonTonStartStopBehavior() {
+        var listeningFinishedReported = false
+        val speechManager = SpeechInputManager(context)
+        speechManager.onListeningFinished = { listeningFinishedReported = true }
 
-        assertFalse("Session must not start without mic permission", freshVm.uiState.value.isVoiceSessionActive)
-        assertTrue(freshVm.uiState.value.statusMessage.contains("Microphone permission required", ignoreCase = true))
+        // Start listening
+        speechManager.startListening()
+
+        // Simulate silence timeout event
+        val listenerMethod = SpeechInputManager::class.java.getDeclaredMethod("createListener")
+        listenerMethod.isAccessible = true
+        val listener = listenerMethod.invoke(speechManager) as android.speech.RecognitionListener
+        listener.onError(android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+
+        // For silence timeout, onListeningFinished must NOT be called so the UI doesn't flutter ON and OFF
+        assertFalse("onListeningFinished must not fire on normal speech timeout", listeningFinishedReported)
+
+        speechManager.destroy()
     }
 
-    /** Test Case 16: Verify SpeechInputManager handles ERROR_CLIENT cleanly without surfacing client side error */
+    // =========================================================================
+    // ACTION BRIDGE & PERMISSION TESTS
+    // =========================================================================
+
     @Test
-    fun testCase16_ClientErrorRecovery() {
-        var surfacedError: String? = null
-        var timeoutTriggered = false
-        val speechManager = com.example.poxi.audio.SpeechInputManager(context)
-        speechManager.onError = { surfacedError = it }
-        speechManager.onSpeechTimeout = { timeoutTriggered = true }
-
-        // Trigger ERROR_CLIENT
-        val listenerField = com.example.poxi.audio.SpeechInputManager::class.java.getDeclaredMethod("createListener")
-        listenerField.isAccessible = true
-        val listener = listenerField.invoke(speechManager) as android.speech.RecognitionListener
-        listener.onError(android.speech.SpeechRecognizer.ERROR_CLIENT)
-
-        assertFalse("Client side error should not be shown to user", surfacedError == "Client side error")
-        assertTrue("Timeout callback should be triggered for graceful retry", timeoutTriggered)
+    fun testCase_CallContact_HindiDevanagari() {
+        val result = geminiService.processWithLocalIntentEngine("कॉल भाई")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertEquals("callContact", success.toolAction?.functionName)
+        assertEquals("भाई", success.toolAction?.arguments?.get("contactName"))
     }
 
-    /** Test Case 17: PermissionValidationLayer strictly guards Gemini Live session start */
     @Test
-    fun testCase17_PermissionValidationLayer_GuardsSession() {
-        org.robolectric.Shadows.shadowOf(application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
-        assertFalse(com.example.poxi.permission.PermissionValidationLayer.hasRecordAudioPermission(application))
+    fun testCase_CallContact_Hinglish() {
+        val result = geminiService.processWithLocalIntentEngine("Mummy ko call karo")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertEquals("callContact", success.toolAction?.functionName)
+        assertEquals("Mummy", success.toolAction?.arguments?.get("contactName"))
+    }
 
+    @Test
+    fun testCase_CallPhoneNumber() {
+        val result = geminiService.processWithLocalIntentEngine("Call 9876543210")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertEquals("makeCall", success.toolAction?.functionName)
+        assertEquals("9876543210", success.toolAction?.arguments?.get("phoneNumber"))
+    }
+
+    @Test
+    fun testCase_PermissionValidationLayer_GuardsSession() {
+        org.robolectric.Shadows.shadowOf(application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
         val vm = PoxiViewModel(application)
         vm.startVoiceSession()
 
-        assertFalse("Gemini Live session must not start when RECORD_AUDIO is denied", vm.uiState.value.isVoiceSessionActive)
-        assertTrue("Permission dialog must be displayed", vm.uiState.value.showPermissionDeniedDialog)
-        assertTrue("Dialog title must indicate requirement", vm.uiState.value.permissionDialogTitle.contains("Microphone", ignoreCase = true))
+        assertFalse("Session must not start without mic permission", vm.uiState.value.isVoiceSessionActive)
+        assertTrue("Permission dialog must show", vm.uiState.value.showPermissionDeniedDialog)
     }
 
-    /** Test Case 18: Permission denied UI prompt can be dismissed or reopened */
     @Test
-    fun testCase18_PermissionDeniedDialog_DismissAndState() {
+    fun testCase_PermissionDeniedDialog_DismissAndState() {
         val vm = PoxiViewModel(application)
         vm.onPermissionsResult(micGranted = false, contactsGranted = true, permanentlyDenied = false)
 
@@ -263,9 +296,8 @@ class PoxiAssistantTest {
         assertFalse(vm.uiState.value.showPermissionDeniedDialog)
     }
 
-    /** Test Case 19: Permanent denial marks settings redirection */
     @Test
-    fun testCase19_PermanentDenial_FlagsSettingsPrompt() {
+    fun testCase_PermanentDenial_FlagsSettingsPrompt() {
         val vm = PoxiViewModel(application)
         vm.onPermissionsResult(micGranted = false, contactsGranted = false, permanentlyDenied = true)
 

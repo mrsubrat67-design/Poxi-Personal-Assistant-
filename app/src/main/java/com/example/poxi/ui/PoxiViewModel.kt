@@ -1,25 +1,23 @@
 package com.example.poxi.ui
 
-import android.Manifest
 import android.app.Application
-import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.BuildConfig
 import com.example.poxi.audio.SpeechInputManager
+import com.example.poxi.audio.VoiceLogger
 import com.example.poxi.audio.VoiceOutputManager
 import com.example.poxi.bridge.AndroidActionBridge
-import com.example.poxi.bridge.BridgeResult
 import com.example.poxi.gemini.GeminiService
 import com.example.poxi.gemini.GeminiTurnResult
 import com.example.poxi.model.ChatMessage
 import com.example.poxi.model.ContactItem
 import com.example.poxi.model.MessageRole
+import com.example.poxi.model.PoxiUiState
 import com.example.poxi.model.ToolActionInfo
-import com.example.poxi.service.PoxiVoiceService
 import com.example.poxi.permission.PermissionValidationLayer
+import com.example.poxi.service.PoxiVoiceService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,68 +25,46 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class PoxiUiState(
-    val messages: List<ChatMessage> = emptyList(),
-    val isListening: Boolean = false,
-    val isSpeaking: Boolean = false,
-    val isProcessing: Boolean = false,
-    val isVoiceSessionActive: Boolean = false,
-    val audioAmplitude: Float = 0f,
-    val currentSpokenText: String? = null,
-    val lastExecutedAction: ToolActionInfo? = null,
-    val pendingContactDisambiguation: List<ContactItem>? = null,
-    val currentLanguage: String = "English / Hinglish / हिंदी",
-    val hasMicrophonePermission: Boolean = false,
-    val hasContactsPermission: Boolean = false,
-    val showPermissionDeniedDialog: Boolean = false,
-    val isPermissionPermanentlyDenied: Boolean = false,
-    val permissionDialogTitle: String = "Microphone Access Required",
-    val permissionDialogMessage: String = "Poxi requires microphone access (RECORD_AUDIO) to listen to your voice and initiate the real-time Gemini voice session.",
-    val statusMessage: String = "Tap the microphone to speak with Poxi",
-    val isNativeBridgeReady: Boolean = true,
-    val apiKey: String = ""
-)
+class PoxiViewModel(
+    application: Application,
+    val actionBridge: AndroidActionBridge = AndroidActionBridge(application),
+    val geminiService: GeminiService = GeminiService(actionBridge),
+    val speechInputManager: SpeechInputManager = SpeechInputManager(application),
+    val voiceOutputManager: VoiceOutputManager = VoiceOutputManager(application)
+) : AndroidViewModel(application) {
 
-class PoxiViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val context: Context get() = getApplication()
-
-    val actionBridge = AndroidActionBridge(context)
-    val voiceOutputManager = VoiceOutputManager(context)
-    val speechInputManager = SpeechInputManager(context)
-    val geminiService = GeminiService(actionBridge)
+    private val context get() = getApplication<Application>()
 
     private val _uiState = MutableStateFlow(PoxiUiState())
     val uiState: StateFlow<PoxiUiState> = _uiState.asStateFlow()
 
     init {
-        // Resolve API key from BuildConfig or saved prefs
-        val initialKey = try {
-            BuildConfig.GEMINI_API_KEY
-        } catch (_: Exception) {
-            ""
-        }
-        val safeKey = if (initialKey == "MY_GEMINI_API_KEY") "" else initialKey
+        // Initial permission check using strict validation layer
+        val hasMicPermission = PermissionValidationLayer.hasRecordAudioPermission(context)
+        val hasContacts = PermissionValidationLayer.hasContactsPermission(context)
+        val hasCallPhone = PermissionValidationLayer.hasCallPhonePermission(context)
 
         _uiState.update {
             it.copy(
-                apiKey = safeKey,
-                hasMicrophonePermission = checkPermission(Manifest.permission.RECORD_AUDIO),
-                hasContactsPermission = checkPermission(Manifest.permission.READ_CONTACTS)
+                hasMicrophonePermission = hasMicPermission,
+                hasContactsPermission = hasContacts,
+                hasPhoneCallPermission = hasCallPhone
             )
         }
 
-        // Setup Audio callbacks
+        // Setup Audio Playback callbacks
         voiceOutputManager.onSpeakingStarted = {
             _uiState.update { it.copy(isSpeaking = true, statusMessage = "Poxi is speaking...") }
+            // Pause speech recognition while speaking to prevent self-triggering
+            speechInputManager.pauseListening()
         }
 
         voiceOutputManager.onSpeakingFinished = {
             _uiState.update { it.copy(isSpeaking = false, statusMessage = "Listening for your reply...") }
-            // Continuous session: auto-listen after Poxi finishes speaking
-            if (_uiState.value.isVoiceSessionActive) {
+            // Continuous session: resume listening seamlessly after Poxi finishes speaking
+            if (_uiState.value.isVoiceSessionActive && !_uiState.value.isProcessing) {
                 viewModelScope.launch {
-                    delay(350)
+                    delay(150)
                     if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
                         speechInputManager.startListening()
                     }
@@ -105,21 +81,24 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update {
                 it.copy(
                     isListening = true,
-                    statusMessage = "Listening... speak now"
+                    statusMessage = "Listening... speak anytime"
                 )
             }
         }
 
         speechInputManager.onListeningFinished = {
-            _uiState.update { it.copy(isListening = false) }
+            // Only update UI if voice session is actually inactive
+            if (!_uiState.value.isVoiceSessionActive) {
+                _uiState.update { it.copy(isListening = false) }
+            }
         }
 
         speechInputManager.onSpeechTimeout = {
-            // Keep session active on pause/silence: re-arm recognizer
-            if (_uiState.value.isVoiceSessionActive) {
+            // Continuous session: normal silence handled internally without toggling microphone off in UI
+            if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
                 viewModelScope.launch {
-                    delay(250)
-                    if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
+                    delay(500)
+                    if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing && !speechInputManager.isListening) {
                         speechInputManager.startListening()
                     }
                 }
@@ -127,7 +106,7 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         speechInputManager.onRmsChanged = { rms ->
-            if (_uiState.value.isListening) {
+            if (_uiState.value.isListening && !_uiState.value.isSpeaking) {
                 _uiState.update { it.copy(audioAmplitude = rms) }
             }
         }
@@ -139,18 +118,17 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         speechInputManager.onError = { errorMsg ->
             _uiState.update {
                 it.copy(
-                    isListening = false,
                     statusMessage = errorMsg
                 )
             }
         }
 
-        // Notification stop button trigger
+        // Notification stop button trigger from Foreground Service
         PoxiVoiceService.onStopActionTriggered = {
             stopVoiceSession()
         }
 
-        // Add welcome message
+        // Welcome message
         val welcomeMsg = ChatMessage(
             role = MessageRole.ASSISTANT,
             text = "Namaste! I'm Poxi, your voice AI assistant. I can speak English, Hindi, Hinglish, Marathi, and more. Try saying \"WhatsApp kholo\", \"Call Mom\", or \"Open YouTube\"!",
@@ -163,8 +141,14 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun hasRecordAudioPermission(): Boolean {
-        return PermissionValidationLayer.hasRecordAudioPermission(context)
+    fun updatePermissionsState() {
+        _uiState.update {
+            it.copy(
+                hasMicrophonePermission = PermissionValidationLayer.hasRecordAudioPermission(context),
+                hasContactsPermission = PermissionValidationLayer.hasContactsPermission(context),
+                hasPhoneCallPermission = PermissionValidationLayer.hasCallPhonePermission(context)
+            )
+        }
     }
 
     fun onPermissionsResult(micGranted: Boolean, contactsGranted: Boolean, permanentlyDenied: Boolean = false) {
@@ -174,35 +158,46 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
                 hasContactsPermission = contactsGranted,
                 showPermissionDeniedDialog = !micGranted,
                 isPermissionPermanentlyDenied = permanentlyDenied,
-                statusMessage = if (micGranted) {
-                    "Microphone ready! Tap mic to speak"
+                permissionDialogTitle = if (permanentlyDenied) "Permission Denied Permanently" else "Microphone Permission Required",
+                permissionDialogMessage = if (permanentlyDenied) {
+                    "Microphone permission is required to talk with Poxi. Please enable it in Settings."
                 } else {
-                    "Microphone permission is required to talk to Poxi"
-                }
+                    "Poxi needs microphone access to listen to your voice and talk back."
+                },
+                statusMessage = if (!micGranted) "Microphone permission is required" else "Microphone permission granted"
             )
         }
+        if (micGranted && !_uiState.value.isVoiceSessionActive) {
+            startVoiceSession()
+        }
+    }
+
+    fun openAppSettings(activity: android.app.Activity? = null) {
+        try {
+            val intent = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.fromParts("package", context.packageName, null)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+    }
+
+    fun toggleListening() {
+        toggleVoiceSession()
     }
 
     fun dismissPermissionDialog() {
         _uiState.update { it.copy(showPermissionDeniedDialog = false) }
     }
 
-    fun openAppSettings() {
-        PermissionValidationLayer.openAppSettings(context)
-        _uiState.update { it.copy(showPermissionDeniedDialog = false) }
-    }
-
-    fun toggleListening() {
-        if (_uiState.value.isSpeaking) {
-            // Interrupt Poxi while speaking
-            interruptSpeaking()
-            return
-        }
-
+    /**
+     * Toggles continuous voice mode.
+     * Prevents race conditions or duplicate voice sessions.
+     */
+    fun toggleVoiceSession() {
         if (_uiState.value.isVoiceSessionActive) {
             stopVoiceSession()
         } else {
-            // Robust validation layer check for RECORD_AUDIO before attempting to initiate session
             if (!PermissionValidationLayer.hasRecordAudioPermission(context)) {
                 _uiState.update {
                     it.copy(
@@ -219,7 +214,7 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Starts continuous voice session with Android Foreground Service.
-     * Validates RECORD_AUDIO permission before attempting to initiate the Gemini Live session.
+     * Single tap starts continuous listening.
      */
     fun startVoiceSession() {
         if (!PermissionValidationLayer.hasRecordAudioPermission(context)) {
@@ -233,11 +228,18 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Prevent duplicate simultaneous sessions
+        if (_uiState.value.isVoiceSessionActive) {
+            return
+        }
+
+        VoiceLogger.logSessionStart()
         _uiState.update {
             it.copy(
                 isVoiceSessionActive = true,
+                isListening = true,
                 showPermissionDeniedDialog = false,
-                statusMessage = "Listening... speak now"
+                statusMessage = "Listening... speak anytime"
             )
         }
         PoxiVoiceService.start(context)
@@ -246,9 +248,14 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Stops continuous voice session, stops speech recognizer, halts audio playback,
-     * and terminates the Foreground Service.
+     * completely releases the microphone, and terminates the Foreground Service.
      */
     fun stopVoiceSession() {
+        if (!_uiState.value.isVoiceSessionActive && !_uiState.value.isListening && !_uiState.value.isSpeaking) {
+            return
+        }
+
+        VoiceLogger.logSessionStop()
         _uiState.update {
             it.copy(
                 isVoiceSessionActive = false,
@@ -259,24 +266,26 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         speechInputManager.stopListening()
+        speechInputManager.destroy()
         voiceOutputManager.stop()
         PoxiVoiceService.stop(context)
     }
 
     /**
-     * Immediately silences Poxi when user interrupts, and immediately re-arms the mic if session is active.
+     * Immediately silences Poxi when user interrupts, and immediately re-arms the mic.
      */
     fun interruptSpeaking() {
+        VoiceLogger.logUserInterrupted()
         voiceOutputManager.stop()
         _uiState.update {
             it.copy(
                 isSpeaking = false,
-                statusMessage = "Interrupted — Listening for your command..."
+                statusMessage = "Listening for your command..."
             )
         }
         if (_uiState.value.isVoiceSessionActive) {
             viewModelScope.launch {
-                delay(200)
+                delay(100)
                 if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking) {
                     speechInputManager.startListening()
                 }
@@ -356,7 +365,6 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectDisambiguatedContact(contact: ContactItem) {
         _uiState.update { it.copy(pendingContactDisambiguation = null) }
-        val prompt = "Calling ${contact.name}"
         actionBridge.executeMakeCall(contact.phoneNumber)
         val msg = ChatMessage(
             role = MessageRole.ASSISTANT,

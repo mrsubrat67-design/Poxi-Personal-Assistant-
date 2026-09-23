@@ -36,6 +36,7 @@ class PoxiVoiceService : Service() {
 
         private val _isServiceActive = MutableStateFlow(false)
         val isServiceActive: StateFlow<Boolean> = _isServiceActive.asStateFlow()
+        private var isStopRequested = false
 
         var onStopActionTriggered: (() -> Unit)? = null
 
@@ -47,6 +48,8 @@ class PoxiVoiceService : Service() {
                 return
             }
 
+            isStopRequested = false
+            _isServiceActive.value = true
             try {
                 val intent = Intent(context, PoxiVoiceService::class.java).apply {
                     action = ACTION_START
@@ -58,11 +61,13 @@ class PoxiVoiceService : Service() {
         }
 
         fun stop(context: Context) {
+            isStopRequested = true
+            _isServiceActive.value = false
             try {
                 val intent = Intent(context, PoxiVoiceService::class.java).apply {
                     action = ACTION_STOP
                 }
-                context.startService(intent)
+                context.stopService(intent)
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping PoxiVoiceService", e)
             }
@@ -77,12 +82,18 @@ class PoxiVoiceService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
 
-        if (action == ACTION_STOP) {
-            Log.d(TAG, "Stop action received in PoxiVoiceService")
+        if (isStopRequested || action == ACTION_STOP) {
+            Log.d(TAG, "Stop action or stopped state in PoxiVoiceService")
             _isServiceActive.value = false
-            onStopActionTriggered?.invoke()
+            if (action == ACTION_STOP) {
+                onStopActionTriggered?.invoke()
+            }
             stopForegroundCompat()
             stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (action != ACTION_START) {
             return START_NOT_STICKY
         }
 

@@ -6,6 +6,11 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import java.util.Locale
 
+/**
+ * Manages voice output for Poxi.
+ * Prioritizes the native Gemini Live PCM audio pipeline (24kHz Mono).
+ * Uses a single unified, consistent voice profile for fallback TTS without competing engines.
+ */
 class VoiceOutputManager(
     private val context: Context,
     val audioPlayer: AudioPlayer = AudioPlayer(context)
@@ -44,118 +49,83 @@ class VoiceOutputManager(
             isTtsReady = true
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
+                    VoiceLogger.logAudioOutputStart()
                     onSpeakingStarted?.invoke()
                 }
 
                 override fun onDone(utteranceId: String?) {
+                    VoiceLogger.logAudioOutputStop()
                     onSpeakingFinished?.invoke()
                 }
 
                 override fun onError(utteranceId: String?) {
+                    VoiceLogger.logAudioOutputStop()
                     onSpeakingFinished?.invoke()
                 }
             })
-            // Default to Indian English / Hinglish accent
-            setLanguageByLocale(Locale.forLanguageTag("en-IN"))
+
+            // Unified, consistent voice configuration:
+            // Indian English (en-IN) handles English, Hinglish, and Hindi names seamlessly
+            // without competing TTS engines or jarring voice/pitch transitions
+            configureUnifiedVoice()
         } else {
             Log.e(TAG, "TTS Initialization failed with status: $status")
         }
     }
 
-    /**
-     * Set TTS language according to detected language.
-     */
-    fun setLanguageByLocale(locale: Locale) {
+    private fun configureUnifiedVoice() {
         try {
-            val result = tts?.setLanguage(locale)
+            val defaultLocale = Locale.forLanguageTag("en-IN")
+            val result = tts?.setLanguage(defaultLocale)
             if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                // Fallback to English
                 tts?.language = Locale.ENGLISH
             }
+            // Calibrate natural cadence and warmth
+            tts?.setSpeechRate(0.98f)
+            tts?.setPitch(1.02f)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to set TTS language: $locale", e)
+            Log.w(TAG, "Voice configuration fallback", e)
         }
     }
 
     /**
-     * Automatically sets language based on language string or text content.
-     */
-    fun detectAndSetLanguage(text: String, hintLanguage: String? = null) {
-        val lowerHint = (hintLanguage ?: "").lowercase()
-        when {
-            lowerHint.contains("hindi") || isDevanagari(text) -> {
-                setLanguageByLocale(Locale.forLanguageTag("hi-IN"))
-            }
-            lowerHint.contains("marathi") -> {
-                setLanguageByLocale(Locale.forLanguageTag("mr-IN"))
-            }
-            lowerHint.contains("bengali") || lowerHint.contains("bangla") -> {
-                setLanguageByLocale(Locale.forLanguageTag("bn-IN"))
-            }
-            lowerHint.contains("tamil") -> {
-                setLanguageByLocale(Locale.forLanguageTag("ta-IN"))
-            }
-            lowerHint.contains("telugu") -> {
-                setLanguageByLocale(Locale.forLanguageTag("te-IN"))
-            }
-            lowerHint.contains("gujarati") -> {
-                setLanguageByLocale(Locale.forLanguageTag("gu-IN"))
-            }
-            lowerHint.contains("punjabi") -> {
-                setLanguageByLocale(Locale.forLanguageTag("pa-IN"))
-            }
-            lowerHint.contains("kannada") -> {
-                setLanguageByLocale(Locale.forLanguageTag("kn-IN"))
-            }
-            lowerHint.contains("malayalam") -> {
-                setLanguageByLocale(Locale.forLanguageTag("ml-IN"))
-            }
-            lowerHint.contains("hinglish") || isHinglish(text) -> {
-                // For Hinglish, hi-IN or en-IN voices articulate Hinglish phrases like "WhatsApp khol raha hoon" perfectly
-                setLanguageByLocale(Locale.forLanguageTag("hi-IN"))
-            }
-            else -> {
-                setLanguageByLocale(Locale.forLanguageTag("en-IN"))
-            }
-        }
-    }
-
-    private fun isDevanagari(text: String): Boolean {
-        return text.any { it in '\u0900'..'\u097F' }
-    }
-
-    private fun isHinglish(text: String): Boolean {
-        val lower = text.lowercase()
-        val hinglishTokens = listOf(
-            "kholo", "karo", "karta", "karti", "hai", "hain", "hoon", "aap", "tum", "mera", "meri",
-            "kaise", "batao", "chal", "chalao", "lagao", "baat", "shukriya", "dhanyawad", "theek"
-        )
-        return hinglishTokens.any { lower.contains(it) }
-    }
-
-    /**
-     * Plays spoken voice: if Gemini Live audio bytes are available, plays raw audio;
-     * otherwise synthesizes speech via on-device multi-lingual voice engine.
+     * Speaks out Poxi's response.
+     * Uses native Gemini Live audio PCM bytes if available;
+     * falls back to the unified local voice engine only when audio bytes are absent.
      */
     fun speak(text: String, audioBytes: ByteArray? = null, languageHint: String? = null) {
         stop()
 
         if (audioBytes != null && audioBytes.isNotEmpty()) {
-            // Play true Gemini Live generated voice bytes
+            // Native Gemini Live voice pipeline
             audioPlayer.playPcm(audioBytes, sampleRate = 24000)
         } else {
-            // Synthesize voice
-            if (isTtsReady && tts != null) {
-                detectAndSetLanguage(text, languageHint)
+            // Unified local voice fallback
+            if (isTtsReady && tts != null && text.isNotBlank()) {
+                // If text contains pure Devanagari script, switch gently to hi-IN, else keep en-IN
+                val isDevanagari = text.any { it in '\u0900'..'\u097F' }
+                if (isDevanagari) {
+                    try {
+                        tts?.language = Locale.forLanguageTag("hi-IN")
+                    } catch (_: Exception) {}
+                } else {
+                    try {
+                        tts?.language = Locale.forLanguageTag("en-IN")
+                    } catch (_: Exception) {}
+                }
                 tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "poxi_voice_${System.currentTimeMillis()}")
+            } else {
+                // If TTS isn't ready or text is blank, ensure finished callback is called
+                onSpeakingFinished?.invoke()
             }
         }
     }
 
     /**
-     * Immediately interrupts and silences voice.
+     * Immediately silences and halts speech (interruption support).
      */
     fun stop() {
+        val wasPlaying = audioPlayer.isPlaying || (tts?.isSpeaking == true)
         audioPlayer.stop()
         try {
             if (tts?.isSpeaking == true) {
@@ -164,14 +134,18 @@ class VoiceOutputManager(
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping TTS", e)
         }
-        onSpeakingFinished?.invoke()
+
+        if (wasPlaying) {
+            VoiceLogger.logAudioOutputStop()
+            onSpeakingFinished?.invoke()
+        }
     }
 
     fun shutdown() {
         stop()
         try {
             tts?.shutdown()
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
+        tts = null
     }
 }
