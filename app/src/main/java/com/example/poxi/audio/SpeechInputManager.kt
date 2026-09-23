@@ -10,6 +10,8 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 
+import com.example.poxi.permission.PermissionValidationLayer
+
 class SpeechInputManager(private val context: Context) {
 
     companion object {
@@ -161,6 +163,12 @@ class SpeechInputManager(private val context: Context) {
 
     fun startListening(languagePreference: String = "hi-IN") {
         runOnMainThread {
+            if (!PermissionValidationLayer.hasRecordAudioPermission(context)) {
+                Log.w(TAG, "Cannot start listening: RECORD_AUDIO permission is not granted")
+                onError?.invoke("Microphone permission required")
+                return@runOnMainThread
+            }
+
             if (isListening) {
                 Log.d(TAG, "startListening called but already listening")
                 return@runOnMainThread

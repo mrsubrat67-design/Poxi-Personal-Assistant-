@@ -1,14 +1,22 @@
 package com.example.poxi.ui
 
 import android.Manifest
+import android.app.Activity
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -48,6 +56,8 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -66,11 +76,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.poxi.permission.PermissionValidationLayer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -86,13 +99,21 @@ fun PoxiScreen(
     var textInput by remember { mutableStateOf("") }
     var showKeyboardInput by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
+    val activity = context as? Activity
+
     // Multi-permission launcher for Microphone and Contacts
     val permissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val mic = permissions[Manifest.permission.RECORD_AUDIO] == true
         val contacts = permissions[Manifest.permission.READ_CONTACTS] == true
-        viewModel.onPermissionsResult(mic, contacts)
+        val permanentlyDenied = if (!mic && activity != null) {
+            !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.RECORD_AUDIO)
+        } else {
+            false
+        }
+        viewModel.onPermissionsResult(mic, contacts, permanentlyDenied)
     }
 
     LaunchedEffect(Unit) {
@@ -233,38 +254,72 @@ fun PoxiScreen(
                 }
             }
 
-            // Permissions notification bar if not granted
-            if (!uiState.hasMicrophonePermission || !uiState.hasContactsPermission) {
+            // Robust Permissions Validation Banner if RECORD_AUDIO not granted
+            AnimatedVisibility(
+                visible = !uiState.hasMicrophonePermission,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
                 Surface(
-                    color = Color(0xFF1E293B),
+                    color = Color(0xFF2B1425),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color(0xFFE11D48).copy(alpha = 0.6f)),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 4.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .testTag("mic_permission_banner")
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = "Enable Mic & Contacts for voice actions",
-                            color = Color(0xFFCBD5E1),
-                            fontSize = 12.sp,
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextButton(
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MicOff,
+                                contentDescription = "Microphone Denied",
+                                tint = Color(0xFFFB7185),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Microphone permission required for Gemini voice session",
+                                color = Color(0xFFFDE8E8),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Button(
                             onClick = {
-                                permissionsLauncher.launch(
-                                    arrayOf(
+                                if (uiState.isPermissionPermanentlyDenied) {
+                                    viewModel.openAppSettings()
+                                } else {
+                                    val permissions = mutableListOf(
                                         Manifest.permission.RECORD_AUDIO,
                                         Manifest.permission.READ_CONTACTS,
                                         Manifest.permission.CALL_PHONE
                                     )
-                                )
-                            }
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    permissionsLauncher.launch(permissions.toTypedArray())
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .height(32.dp)
+                                .testTag("banner_enable_mic_button")
                         ) {
-                            Text(text = "Grant", color = Color(0xFF38BDF8), fontSize = 12.sp)
+                            Text(
+                                text = if (uiState.isPermissionPermanentlyDenied) "Settings" else "Allow",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
@@ -414,16 +469,30 @@ fun PoxiScreen(
                             }
                         )
                         .clickable {
-                            if (!uiState.hasMicrophonePermission) {
-                                val permissions = mutableListOf(
-                                    Manifest.permission.RECORD_AUDIO,
-                                    Manifest.permission.READ_CONTACTS,
-                                    Manifest.permission.CALL_PHONE
-                                )
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                                    permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                            val micGranted = PermissionValidationLayer.hasRecordAudioPermission(context)
+                            if (!micGranted) {
+                                val isPermanentlyDenied = if (activity != null) {
+                                    !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.RECORD_AUDIO)
+                                } else {
+                                    false
                                 }
-                                permissionsLauncher.launch(permissions.toTypedArray())
+                                viewModel.onPermissionsResult(
+                                    micGranted = false,
+                                    contactsGranted = uiState.hasContactsPermission,
+                                    permanentlyDenied = isPermanentlyDenied
+                                )
+
+                                if (!isPermanentlyDenied) {
+                                    val permissions = mutableListOf(
+                                        Manifest.permission.RECORD_AUDIO,
+                                        Manifest.permission.READ_CONTACTS,
+                                        Manifest.permission.CALL_PHONE
+                                    )
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    permissionsLauncher.launch(permissions.toTypedArray())
+                                }
                             } else {
                                 viewModel.toggleListening()
                             }
@@ -554,6 +623,101 @@ fun PoxiScreen(
                     Text("Close")
                 }
             }
+        )
+    }
+
+    // Clear UI Prompt when RECORD_AUDIO Permission is Denied
+    if (uiState.showPermissionDeniedDialog) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissPermissionDialog() },
+            icon = {
+                Box(
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF3F1B2A)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MicOff,
+                        contentDescription = "Microphone Disabled",
+                        tint = Color(0xFFFB7185),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            },
+            title = {
+                Text(
+                    text = uiState.permissionDialogTitle,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = uiState.permissionDialogMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFE2E8F0)
+                    )
+                    if (uiState.isPermissionPermanentlyDenied) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = "Microphone permission has been disabled. Tap 'Open Settings' below to enable it under App Permissions.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF94A3B8),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Poxi uses your microphone to transcribe and converse via Gemini in real-time.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF94A3B8)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (uiState.isPermissionPermanentlyDenied) {
+                            viewModel.openAppSettings()
+                        } else {
+                            viewModel.dismissPermissionDialog()
+                            val permissions = mutableListOf(
+                                Manifest.permission.RECORD_AUDIO,
+                                Manifest.permission.READ_CONTACTS,
+                                Manifest.permission.CALL_PHONE
+                            )
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                            permissionsLauncher.launch(permissions.toTypedArray())
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF8B5CF6)
+                    ),
+                    modifier = Modifier.testTag("grant_permission_button")
+                ) {
+                    Text(if (uiState.isPermissionPermanentlyDenied) "Open Settings" else "Grant Permission")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { viewModel.dismissPermissionDialog() },
+                    modifier = Modifier.testTag("dismiss_permission_button")
+                ) {
+                    Text("Not Now", color = Color(0xFFCBD5E1))
+                }
+            },
+            containerColor = Color(0xFF131B2E),
+            modifier = Modifier.testTag("permission_denied_dialog")
         )
     }
 }

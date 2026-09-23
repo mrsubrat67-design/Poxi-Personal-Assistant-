@@ -19,6 +19,7 @@ import com.example.poxi.model.ContactItem
 import com.example.poxi.model.MessageRole
 import com.example.poxi.model.ToolActionInfo
 import com.example.poxi.service.PoxiVoiceService
+import com.example.poxi.permission.PermissionValidationLayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +40,10 @@ data class PoxiUiState(
     val currentLanguage: String = "English / Hinglish / हिंदी",
     val hasMicrophonePermission: Boolean = false,
     val hasContactsPermission: Boolean = false,
+    val showPermissionDeniedDialog: Boolean = false,
+    val isPermissionPermanentlyDenied: Boolean = false,
+    val permissionDialogTitle: String = "Microphone Access Required",
+    val permissionDialogMessage: String = "Poxi requires microphone access (RECORD_AUDIO) to listen to your voice and initiate the real-time Gemini voice session.",
     val statusMessage: String = "Tap the microphone to speak with Poxi",
     val isNativeBridgeReady: Boolean = true,
     val apiKey: String = ""
@@ -158,14 +163,33 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun onPermissionsResult(micGranted: Boolean, contactsGranted: Boolean) {
+    fun hasRecordAudioPermission(): Boolean {
+        return PermissionValidationLayer.hasRecordAudioPermission(context)
+    }
+
+    fun onPermissionsResult(micGranted: Boolean, contactsGranted: Boolean, permanentlyDenied: Boolean = false) {
         _uiState.update {
             it.copy(
                 hasMicrophonePermission = micGranted,
                 hasContactsPermission = contactsGranted,
-                statusMessage = if (micGranted) "Microphone ready! Tap mic to speak" else "Microphone permission is required to talk to Poxi"
+                showPermissionDeniedDialog = !micGranted,
+                isPermissionPermanentlyDenied = permanentlyDenied,
+                statusMessage = if (micGranted) {
+                    "Microphone ready! Tap mic to speak"
+                } else {
+                    "Microphone permission is required to talk to Poxi"
+                }
             )
         }
+    }
+
+    fun dismissPermissionDialog() {
+        _uiState.update { it.copy(showPermissionDeniedDialog = false) }
+    }
+
+    fun openAppSettings() {
+        PermissionValidationLayer.openAppSettings(context)
+        _uiState.update { it.copy(showPermissionDeniedDialog = false) }
     }
 
     fun toggleListening() {
@@ -178,10 +202,12 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.isVoiceSessionActive) {
             stopVoiceSession()
         } else {
-            if (!checkPermission(Manifest.permission.RECORD_AUDIO)) {
+            // Robust validation layer check for RECORD_AUDIO before attempting to initiate session
+            if (!PermissionValidationLayer.hasRecordAudioPermission(context)) {
                 _uiState.update {
                     it.copy(
                         hasMicrophonePermission = false,
+                        showPermissionDeniedDialog = true,
                         statusMessage = "Microphone permission required — please allow access"
                     )
                 }
@@ -193,13 +219,15 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Starts continuous voice session with Android Foreground Service.
+     * Validates RECORD_AUDIO permission before attempting to initiate the Gemini Live session.
      */
     fun startVoiceSession() {
-        if (!checkPermission(Manifest.permission.RECORD_AUDIO)) {
+        if (!PermissionValidationLayer.hasRecordAudioPermission(context)) {
             _uiState.update {
                 it.copy(
                     hasMicrophonePermission = false,
-                    statusMessage = "Microphone permission required"
+                    showPermissionDeniedDialog = true,
+                    statusMessage = "Microphone permission required to start voice session"
                 )
             }
             return
@@ -208,6 +236,7 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 isVoiceSessionActive = true,
+                showPermissionDeniedDialog = false,
                 statusMessage = "Listening... speak now"
             )
         }

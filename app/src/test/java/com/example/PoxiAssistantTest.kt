@@ -235,4 +235,42 @@ class PoxiAssistantTest {
         assertFalse("Client side error should not be shown to user", surfacedError == "Client side error")
         assertTrue("Timeout callback should be triggered for graceful retry", timeoutTriggered)
     }
+
+    /** Test Case 17: PermissionValidationLayer strictly guards Gemini Live session start */
+    @Test
+    fun testCase17_PermissionValidationLayer_GuardsSession() {
+        org.robolectric.Shadows.shadowOf(application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
+        assertFalse(com.example.poxi.permission.PermissionValidationLayer.hasRecordAudioPermission(application))
+
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+
+        assertFalse("Gemini Live session must not start when RECORD_AUDIO is denied", vm.uiState.value.isVoiceSessionActive)
+        assertTrue("Permission dialog must be displayed", vm.uiState.value.showPermissionDeniedDialog)
+        assertTrue("Dialog title must indicate requirement", vm.uiState.value.permissionDialogTitle.contains("Microphone", ignoreCase = true))
+    }
+
+    /** Test Case 18: Permission denied UI prompt can be dismissed or reopened */
+    @Test
+    fun testCase18_PermissionDeniedDialog_DismissAndState() {
+        val vm = PoxiViewModel(application)
+        vm.onPermissionsResult(micGranted = false, contactsGranted = true, permanentlyDenied = false)
+
+        assertTrue(vm.uiState.value.showPermissionDeniedDialog)
+        assertFalse(vm.uiState.value.isPermissionPermanentlyDenied)
+
+        vm.dismissPermissionDialog()
+        assertFalse(vm.uiState.value.showPermissionDeniedDialog)
+    }
+
+    /** Test Case 19: Permanent denial marks settings redirection */
+    @Test
+    fun testCase19_PermanentDenial_FlagsSettingsPrompt() {
+        val vm = PoxiViewModel(application)
+        vm.onPermissionsResult(micGranted = false, contactsGranted = false, permanentlyDenied = true)
+
+        assertTrue(vm.uiState.value.showPermissionDeniedDialog)
+        assertTrue(vm.uiState.value.isPermissionPermanentlyDenied)
+        assertTrue(vm.uiState.value.statusMessage.contains("Microphone permission is required", ignoreCase = true))
+    }
 }
