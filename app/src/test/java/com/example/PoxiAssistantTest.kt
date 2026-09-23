@@ -32,6 +32,11 @@ class PoxiAssistantTest {
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
         application = ApplicationProvider.getApplicationContext()
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(
+            android.Manifest.permission.RECORD_AUDIO,
+            android.Manifest.permission.READ_CONTACTS,
+            android.Manifest.permission.CALL_PHONE
+        )
         actionBridge = AndroidActionBridge(context)
         geminiService = GeminiService(actionBridge)
         viewModel = PoxiViewModel(application)
@@ -199,5 +204,35 @@ class PoxiAssistantTest {
         assertFalse("Speaking must be stopped on interrupt", viewModel.uiState.value.isSpeaking)
         // Clean up
         viewModel.stopVoiceSession()
+    }
+
+    /** Test Case 15: Tapping voice button when permission is missing requests it and guards session */
+    @Test
+    fun testCase15_MicPermissionEnforcement() {
+        org.robolectric.Shadows.shadowOf(application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val freshVm = PoxiViewModel(application)
+        freshVm.toggleListening()
+
+        assertFalse("Session must not start without mic permission", freshVm.uiState.value.isVoiceSessionActive)
+        assertTrue(freshVm.uiState.value.statusMessage.contains("Microphone permission required", ignoreCase = true))
+    }
+
+    /** Test Case 16: Verify SpeechInputManager handles ERROR_CLIENT cleanly without surfacing client side error */
+    @Test
+    fun testCase16_ClientErrorRecovery() {
+        var surfacedError: String? = null
+        var timeoutTriggered = false
+        val speechManager = com.example.poxi.audio.SpeechInputManager(context)
+        speechManager.onError = { surfacedError = it }
+        speechManager.onSpeechTimeout = { timeoutTriggered = true }
+
+        // Trigger ERROR_CLIENT
+        val listenerField = com.example.poxi.audio.SpeechInputManager::class.java.getDeclaredMethod("createListener")
+        listenerField.isAccessible = true
+        val listener = listenerField.invoke(speechManager) as android.speech.RecognitionListener
+        listener.onError(android.speech.SpeechRecognizer.ERROR_CLIENT)
+
+        assertFalse("Client side error should not be shown to user", surfacedError == "Client side error")
+        assertTrue("Timeout callback should be triggered for graceful retry", timeoutTriggered)
     }
 }

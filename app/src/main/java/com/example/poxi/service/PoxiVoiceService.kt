@@ -39,6 +39,16 @@ class PoxiVoiceService : Service() {
         var onStopActionTriggered: (() -> Unit)? = null
 
         fun start(context: Context) {
+            val hasMicPermission = ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            if (!hasMicPermission) {
+                Log.w(TAG, "Cannot start PoxiVoiceService: RECORD_AUDIO permission not granted")
+                return
+            }
+
             try {
                 val intent = Intent(context, PoxiVoiceService::class.java).apply {
                     action = ACTION_START
@@ -78,13 +88,18 @@ class PoxiVoiceService : Service() {
             return START_NOT_STICKY
         }
 
-        Log.d(TAG, "Starting foreground PoxiVoiceService with microphone type")
+        Log.d(TAG, "Starting foreground PoxiVoiceService")
         _isServiceActive.value = true
 
         val notification = buildForegroundNotification()
 
+        val hasMicPermission = ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && hasMicPermission) {
                 startForeground(
                     NOTIFICATION_ID,
                     notification,
@@ -94,7 +109,10 @@ class PoxiVoiceService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to startForeground with microphone type", e)
+            Log.e(TAG, "Failed to startForeground with microphone type, falling back", e)
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (_: Exception) {}
         }
 
         return START_STICKY

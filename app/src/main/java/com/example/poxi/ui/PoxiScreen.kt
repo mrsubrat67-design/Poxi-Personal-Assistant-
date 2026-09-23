@@ -413,7 +413,21 @@ fun PoxiScreen(
                                 Brush.radialGradient(listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)))
                             }
                         )
-                        .clickable { viewModel.toggleListening() }
+                        .clickable {
+                            if (!uiState.hasMicrophonePermission) {
+                                val permissions = mutableListOf(
+                                    Manifest.permission.RECORD_AUDIO,
+                                    Manifest.permission.READ_CONTACTS,
+                                    Manifest.permission.CALL_PHONE
+                                )
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                    permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                permissionsLauncher.launch(permissions.toTypedArray())
+                            } else {
+                                viewModel.toggleListening()
+                            }
+                        }
                         .testTag("mic_button"),
                     contentAlignment = Alignment.Center
                 ) {

@@ -38,7 +38,7 @@ class GeminiService(
     companion object {
         private const val TAG = "GeminiService"
         private const val PRIMARY_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-        private const val FALLBACK_MODEL = "gemini-3.5-flash"
+        private const val FALLBACK_MODEL = "gemini-2.5-flash"
     }
 
     private val httpClient = OkHttpClient.Builder()

@@ -28,6 +28,11 @@
             <action android:name="android.intent.action.CALL" />
             <data android:scheme="tel" />
         </intent>
+        <!-- Speech Recognition Service for SpeechRecognizer on Android 11+ -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <package android:name="com.google.android.googlequicksearchbox" />
     </queries>
 
     <application

@@ -3,6 +3,8 @@ package com.example.poxi.audio
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -14,6 +16,7 @@ class SpeechInputManager(private val context: Context) {
         private const val TAG = "SpeechInputManager"
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var speechRecognizer: SpeechRecognizer? = null
 
     var onSpeechResult: ((String) -> Unit)? = null
@@ -28,16 +31,35 @@ class SpeechInputManager(private val context: Context) {
         private set
 
     init {
-        initRecognizer()
+        runOnMainThread {
+            initRecognizer()
+        }
+    }
+
+    private fun runOnMainThread(action: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action()
+        } else {
+            mainHandler.post(action)
+        }
     }
 
     private fun initRecognizer() {
         try {
             speechRecognizer?.destroy()
         } catch (_: Exception) {}
-        if (SpeechRecognizer.isRecognitionAvailable(context)) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
-                setRecognitionListener(createListener())
+        speechRecognizer = null
+
+        val isAvailable = SpeechRecognizer.isRecognitionAvailable(context)
+        Log.d(TAG, "SpeechRecognizer isRecognitionAvailable: $isAvailable")
+
+        if (isAvailable) {
+            try {
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
+                    setRecognitionListener(createListener())
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create SpeechRecognizer", e)
             }
         }
     }
@@ -45,16 +67,17 @@ class SpeechInputManager(private val context: Context) {
     private fun createListener(): RecognitionListener {
         return object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
+                Log.d(TAG, "SpeechRecognizer onReadyForSpeech")
                 isListening = true
                 onListeningStarted?.invoke()
             }
 
             override fun onBeginningOfSpeech() {
+                Log.d(TAG, "SpeechRecognizer onBeginningOfSpeech")
                 isListening = true
             }
 
             override fun onRmsChanged(rmsdB: Float) {
-                // Normalize roughly from -2 to 10 dB to 0f..1f
                 val normalized = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
                 onRmsChanged?.invoke(normalized)
             }
@@ -62,6 +85,7 @@ class SpeechInputManager(private val context: Context) {
             override fun onBufferReceived(buffer: ByteArray?) {}
 
             override fun onEndOfSpeech() {
+                Log.d(TAG, "SpeechRecognizer onEndOfSpeech")
                 isListening = false
                 onListeningFinished?.invoke()
             }
@@ -70,31 +94,44 @@ class SpeechInputManager(private val context: Context) {
                 isListening = false
                 onListeningFinished?.invoke()
 
-                if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) {
-                    // Re-init recognizer to clear stuck state
-                    initRecognizer()
-                }
+                Log.w(TAG, "SpeechRecognizer onError: code=$error")
 
-                if (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_NO_MATCH) {
-                    Log.d(TAG, "Speech timeout or no match - notifying continuous session")
-                    onSpeechTimeout?.invoke()
-                    return
+                when (error) {
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+                    SpeechRecognizer.ERROR_NO_MATCH -> {
+                        // User paused or no speech recognized during continuous session
+                        Log.d(TAG, "Speech timeout/no match -> trigger retry for continuous session")
+                        onSpeechTimeout?.invoke()
+                    }
+                    SpeechRecognizer.ERROR_CLIENT,
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
+                        // Client or busy error: cleanly re-create the recognizer on main thread
+                        Log.w(TAG, "Recognizer client/busy state ($error) -> reinitializing recognizer")
+                        runOnMainThread {
+                            initRecognizer()
+                        }
+                        // Notify timeout callback to gracefully retry without displaying an error
+                        onSpeechTimeout?.invoke()
+                    }
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
+                        onError?.invoke("Microphone permission required")
+                    }
+                    SpeechRecognizer.ERROR_AUDIO -> {
+                        onError?.invoke("Microphone audio capture error")
+                    }
+                    SpeechRecognizer.ERROR_NETWORK,
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> {
+                        onError?.invoke("Network connection issue")
+                    }
+                    SpeechRecognizer.ERROR_SERVER -> {
+                        onError?.invoke("Voice recognition service unavailable")
+                    }
+                    else -> {
+                        // Generic error
+                        Log.w(TAG, "Unhandled speech recognizer error ($error)")
+                        onSpeechTimeout?.invoke()
+                    }
                 }
-
-                val message = when (error) {
-                    SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
-                    SpeechRecognizer.ERROR_CLIENT -> "Client side error"
-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission required"
-                    SpeechRecognizer.ERROR_NETWORK -> "Network error"
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized"
-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Voice recognizer is busy"
-                    SpeechRecognizer.ERROR_SERVER -> "Voice server error"
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
-                    else -> "Speech recognition error ($error)"
-                }
-                Log.w(TAG, "SpeechRecognizer error: $message")
-                onError?.invoke(message)
             }
 
             override fun onResults(results: Bundle?) {
@@ -102,8 +139,11 @@ class SpeechInputManager(private val context: Context) {
                 onListeningFinished?.invoke()
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val recognized = matches?.firstOrNull()?.trim()
+                Log.d(TAG, "SpeechRecognizer onResults: recognized=$recognized")
                 if (!recognized.isNullOrBlank()) {
                     onSpeechResult?.invoke(recognized)
+                } else {
+                    onSpeechTimeout?.invoke()
                 }
             }
 
@@ -120,47 +160,62 @@ class SpeechInputManager(private val context: Context) {
     }
 
     fun startListening(languagePreference: String = "hi-IN") {
-        stopListening()
+        runOnMainThread {
+            if (isListening) {
+                Log.d(TAG, "startListening called but already listening")
+                return@runOnMainThread
+            }
 
-        if (speechRecognizer == null) {
-            initRecognizer()
-        }
+            if (speechRecognizer == null) {
+                initRecognizer()
+            }
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            // Support Indian multi-lingual speech (Hindi, English, Hinglish)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, languagePreference)
-            putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("en-IN", "hi-IN", "en-US", "mr-IN", "bn-IN"))
-            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-        }
+            if (speechRecognizer == null) {
+                Log.e(TAG, "SpeechRecognizer is null after init")
+                onError?.invoke("Speech recognition is not available on this device")
+                return@runOnMainThread
+            }
 
-        try {
-            speechRecognizer?.startListening(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error starting speech recognition", e)
-            onError?.invoke("Could not start microphone: ${e.message}")
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, languagePreference)
+                putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("en-IN", "hi-IN", "en-US", "mr-IN", "bn-IN"))
+                putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+            }
+
+            try {
+                Log.d(TAG, "Invoking speechRecognizer.startListening")
+                speechRecognizer?.startListening(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception starting speech recognition", e)
+                onError?.invoke("Could not start microphone: ${e.message}")
+            }
         }
     }
 
     fun stopListening() {
-        isListening = false
-        try {
-            speechRecognizer?.stopListening()
-            speechRecognizer?.cancel()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping speech recognition", e)
+        runOnMainThread {
+            if (!isListening) return@runOnMainThread
+            isListening = false
+            try {
+                speechRecognizer?.stopListening()
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception stopping speech recognition", e)
+            }
+            onListeningFinished?.invoke()
         }
-        onListeningFinished?.invoke()
     }
 
     fun destroy() {
-        stopListening()
-        try {
-            speechRecognizer?.destroy()
-        } catch (_: Exception) {
+        runOnMainThread {
+            isListening = false
+            try {
+                speechRecognizer?.cancel()
+                speechRecognizer?.destroy()
+            } catch (_: Exception) {}
+            speechRecognizer = null
         }
-        speechRecognizer = null
     }
 }

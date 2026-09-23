@@ -162,7 +162,8 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 hasMicrophonePermission = micGranted,
-                hasContactsPermission = contactsGranted
+                hasContactsPermission = contactsGranted,
+                statusMessage = if (micGranted) "Microphone ready! Tap mic to speak" else "Microphone permission is required to talk to Poxi"
             )
         }
     }
@@ -177,6 +178,15 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.isVoiceSessionActive) {
             stopVoiceSession()
         } else {
+            if (!checkPermission(Manifest.permission.RECORD_AUDIO)) {
+                _uiState.update {
+                    it.copy(
+                        hasMicrophonePermission = false,
+                        statusMessage = "Microphone permission required — please allow access"
+                    )
+                }
+                return
+            }
             startVoiceSession()
         }
     }
@@ -185,10 +195,20 @@ class PoxiViewModel(application: Application) : AndroidViewModel(application) {
      * Starts continuous voice session with Android Foreground Service.
      */
     fun startVoiceSession() {
+        if (!checkPermission(Manifest.permission.RECORD_AUDIO)) {
+            _uiState.update {
+                it.copy(
+                    hasMicrophonePermission = false,
+                    statusMessage = "Microphone permission required"
+                )
+            }
+            return
+        }
+
         _uiState.update {
             it.copy(
                 isVoiceSessionActive = true,
-                statusMessage = "Starting voice mode..."
+                statusMessage = "Listening... speak now"
             )
         }
         PoxiVoiceService.start(context)
