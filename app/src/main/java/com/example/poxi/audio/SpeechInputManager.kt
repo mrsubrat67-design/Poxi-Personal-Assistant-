@@ -38,6 +38,7 @@ class SpeechInputManager(private val context: Context) {
 
     @Volatile
     private var state: RecognizerState = RecognizerState.IDLE
+    private var consecutiveNonFatalErrors = 0
 
     var onSpeechResult: ((String) -> Unit)? = null
     var onPartialResult: ((String) -> Unit)? = null
@@ -69,6 +70,7 @@ class SpeechInputManager(private val context: Context) {
 
     private fun initRecognizer() {
         try {
+            speechRecognizer?.cancel()
             speechRecognizer?.destroy()
         } catch (_: Exception) {}
         speechRecognizer = null
@@ -81,8 +83,9 @@ class SpeechInputManager(private val context: Context) {
                 speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
                     setRecognitionListener(createListener())
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to create SpeechRecognizer", e)
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to create SpeechRecognizer: ${t.javaClass.simpleName}: ${t.message}", t)
+                speechRecognizer = null
             }
         }
     }
@@ -92,6 +95,7 @@ class SpeechInputManager(private val context: Context) {
             override fun onReadyForSpeech(params: Bundle?) {
                 Log.d(TAG, "SpeechRecognizer onReadyForSpeech")
                 state = RecognizerState.LISTENING
+                consecutiveNonFatalErrors = 0
                 VoiceLogger.logListenStart()
                 VoiceLogger.logAudioInputStart()
                 onListeningStarted?.invoke()
@@ -100,6 +104,7 @@ class SpeechInputManager(private val context: Context) {
             override fun onBeginningOfSpeech() {
                 Log.d(TAG, "SpeechRecognizer onBeginningOfSpeech")
                 state = RecognizerState.LISTENING
+                consecutiveNonFatalErrors = 0
             }
 
             override fun onRmsChanged(rmsdB: Float) {
@@ -126,26 +131,36 @@ class SpeechInputManager(private val context: Context) {
                     SpeechRecognizer.ERROR_NO_MATCH -> {
                         // User paused or brief silence: handle internally without toggling microphone off
                         state = RecognizerState.IDLE
+                        consecutiveNonFatalErrors = 0
                         VoiceLogger.logSpeechTimeout()
                         onSpeechTimeout?.invoke()
                     }
-                    SpeechRecognizer.ERROR_CLIENT,
-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
-                        // Reset recognizer cleanly
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+                    SpeechRecognizer.ERROR_CLIENT -> {
                         state = RecognizerState.IDLE
-                        runOnMainThread {
-                            initRecognizer()
+                        try {
+                            speechRecognizer?.cancel()
+                        } catch (_: Exception) {}
+                        consecutiveNonFatalErrors++
+                        if (consecutiveNonFatalErrors <= 3) {
+                            onSpeechTimeout?.invoke()
+                        } else {
+                            consecutiveNonFatalErrors = 0
+                            state = RecognizerState.STOPPED
+                            onError?.invoke("Speech recognition paused. Tap mic to speak.")
+                            onListeningFinished?.invoke()
                         }
-                        onSpeechTimeout?.invoke()
                     }
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                         state = RecognizerState.STOPPED
+                        consecutiveNonFatalErrors = 0
                         VoiceLogger.logAudioInputStop()
                         onError?.invoke("Microphone permission required")
                         onListeningFinished?.invoke()
                     }
                     SpeechRecognizer.ERROR_AUDIO -> {
                         state = RecognizerState.IDLE
+                        consecutiveNonFatalErrors = 0
                         VoiceLogger.logAudioInputStop()
                         onError?.invoke("Microphone audio capture error")
                         onListeningFinished?.invoke()
@@ -153,18 +168,30 @@ class SpeechInputManager(private val context: Context) {
                     SpeechRecognizer.ERROR_NETWORK,
                     SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> {
                         state = RecognizerState.IDLE
+                        consecutiveNonFatalErrors = 0
                         onError?.invoke("Network connection issue")
                         onListeningFinished?.invoke()
                     }
                     else -> {
                         state = RecognizerState.IDLE
-                        onSpeechTimeout?.invoke()
+                        try {
+                            speechRecognizer?.cancel()
+                        } catch (_: Exception) {}
+                        consecutiveNonFatalErrors++
+                        if (consecutiveNonFatalErrors <= 3) {
+                            onSpeechTimeout?.invoke()
+                        } else {
+                            consecutiveNonFatalErrors = 0
+                            state = RecognizerState.STOPPED
+                            onListeningFinished?.invoke()
+                        }
                     }
                 }
             }
 
             override fun onResults(results: Bundle?) {
                 state = RecognizerState.PROCESSING
+                consecutiveNonFatalErrors = 0
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val recognized = matches?.firstOrNull()?.trim()
                 Log.d(TAG, "SpeechRecognizer onResults: hasInput=${!recognized.isNullOrBlank()}")
@@ -237,10 +264,10 @@ class SpeechInputManager(private val context: Context) {
 
             try {
                 speechRecognizer?.startListening(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Exception starting speech recognition", e)
+            } catch (t: Throwable) {
+                Log.e(TAG, "Exception starting speech recognition", t)
                 state = RecognizerState.IDLE
-                onError?.invoke("Could not start microphone: ${e.message}")
+                onError?.invoke("Could not start microphone: ${t.message}")
             }
         }
     }
@@ -265,8 +292,9 @@ class SpeechInputManager(private val context: Context) {
      */
     fun stopListening() {
         runOnMainThread {
-            if (state == RecognizerState.IDLE || state == RecognizerState.STOPPED) return@runOnMainThread
+            if (state == RecognizerState.STOPPED) return@runOnMainThread
             state = RecognizerState.STOPPED
+            consecutiveNonFatalErrors = 0
             try {
                 speechRecognizer?.cancel()
             } catch (e: Exception) {

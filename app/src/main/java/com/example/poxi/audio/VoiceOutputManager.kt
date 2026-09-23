@@ -113,7 +113,16 @@ class VoiceOutputManager(
                         tts?.language = Locale.forLanguageTag("en-IN")
                     } catch (_: Exception) {}
                 }
-                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "poxi_voice_${System.currentTimeMillis()}")
+                try {
+                    val result = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "poxi_voice_${System.currentTimeMillis()}")
+                    if (result != TextToSpeech.SUCCESS) {
+                        Log.w(TAG, "TTS speak returned error code: $result")
+                        onSpeakingFinished?.invoke()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Exception during TTS speak: ${e.javaClass.simpleName}: ${e.message}", e)
+                    onSpeakingFinished?.invoke()
+                }
             } else {
                 // If TTS isn't ready or text is blank, ensure finished callback is called
                 onSpeakingFinished?.invoke()
@@ -125,17 +134,20 @@ class VoiceOutputManager(
      * Immediately silences and halts speech (interruption support).
      */
     fun stop() {
-        val wasPlaying = audioPlayer.isPlaying || (tts?.isSpeaking == true)
+        val wasAudioPlaying = audioPlayer.isPlaying
+        val wasTtsSpeaking = tts?.isSpeaking == true
         audioPlayer.stop()
         try {
-            if (tts?.isSpeaking == true) {
+            if (wasTtsSpeaking) {
                 tts?.stop()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping TTS", e)
         }
 
-        if (wasPlaying) {
+        // audioPlayer.stop() already invokes audioPlayer.onPlaybackFinished (which calls onSpeakingFinished)
+        // If only TTS was speaking without AudioPlayer, notify onSpeakingFinished here
+        if (wasTtsSpeaking && !wasAudioPlaying) {
             VoiceLogger.logAudioOutputStop()
             onSpeakingFinished?.invoke()
         }

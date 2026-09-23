@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -43,7 +44,6 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -359,9 +359,9 @@ fun PoxiScreen(
             }
 
             // Contact Disambiguation Card (Requirement 6: Multiple Matches)
-            if (uiState.pendingContactDisambiguation != null) {
+            uiState.pendingContactDisambiguation?.let { disambiguationContacts ->
                 ContactDisambiguationCard(
-                    contacts = uiState.pendingContactDisambiguation!!,
+                    contacts = disambiguationContacts,
                     onContactSelected = { viewModel.selectDisambiguatedContact(it) },
                     onDismiss = { viewModel.dismissDisambiguation() }
                 )
@@ -424,7 +424,7 @@ fun PoxiScreen(
                         colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFF8B5CF6)),
                         modifier = Modifier.testTag("send_button")
                     ) {
-                        Icon(imageVector = Icons.Default.Send, contentDescription = "Send", tint = Color.White)
+                        Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White)
                     }
                 }
             }

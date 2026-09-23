@@ -20,6 +20,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Install safe crash diagnostics without logging sensitive information (PII/audio/keys)
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            android.util.Log.e(
+                "POXI_CRASH_DIAGNOSTIC",
+                "FATAL CRASH on thread '${thread.name}': ${throwable.javaClass.name} - ${throwable.message}",
+                throwable
+            )
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
+
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
@@ -35,8 +47,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        viewModel.voiceOutputManager.stop()
-        viewModel.speechInputManager.stopListening()
+        if (isFinishing) {
+            viewModel.stopVoiceSession()
+        }
     }
 }
 

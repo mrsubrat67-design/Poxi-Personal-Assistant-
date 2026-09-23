@@ -14,6 +14,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
+import com.example.R
 import com.example.poxi.permission.PermissionValidationLayer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,6 +37,7 @@ class PoxiVoiceService : Service() {
 
         private val _isServiceActive = MutableStateFlow(false)
         val isServiceActive: StateFlow<Boolean> = _isServiceActive.asStateFlow()
+        @Volatile
         private var isStopRequested = false
 
         var onStopActionTriggered: (() -> Unit)? = null
@@ -56,7 +58,8 @@ class PoxiVoiceService : Service() {
                 }
                 ContextCompat.startForegroundService(context, intent)
             } catch (e: Exception) {
-                Log.e(TAG, "Error starting PoxiVoiceService", e)
+                Log.e(TAG, "Error starting PoxiVoiceService: ${e.javaClass.simpleName}: ${e.message}", e)
+                _isServiceActive.value = false
             }
         }
 
@@ -64,12 +67,10 @@ class PoxiVoiceService : Service() {
             isStopRequested = true
             _isServiceActive.value = false
             try {
-                val intent = Intent(context, PoxiVoiceService::class.java).apply {
-                    action = ACTION_STOP
-                }
+                val intent = Intent(context, PoxiVoiceService::class.java)
                 context.stopService(intent)
             } catch (e: Exception) {
-                Log.e(TAG, "Error stopping PoxiVoiceService", e)
+                Log.e(TAG, "Error stopping PoxiVoiceService: ${e.javaClass.simpleName}: ${e.message}", e)
             }
         }
     }
@@ -81,25 +82,25 @@ class PoxiVoiceService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        Log.d(TAG, "onStartCommand: action=$action, isStopRequested=$isStopRequested")
 
-        if (isStopRequested || action == ACTION_STOP) {
-            Log.d(TAG, "Stop action or stopped state in PoxiVoiceService")
+        // If stop action received from notification action PendingIntent
+        if (action == ACTION_STOP) {
+            Log.d(TAG, "Stop action received in PoxiVoiceService notification")
             _isServiceActive.value = false
-            if (action == ACTION_STOP) {
-                onStopActionTriggered?.invoke()
-            }
+            onStopActionTriggered?.invoke()
             stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY
         }
 
-        if (action != ACTION_START) {
-            return START_NOT_STICKY
-        }
+        createNotificationChannel()
 
-        Log.d(TAG, "Starting foreground PoxiVoiceService")
-        _isServiceActive.value = true
-
+        // CRITICAL ANDROID LIFECYCLE FIX:
+        // When ContextCompat.startForegroundService() is called, the OS strictly mandates that
+        // startForeground() MUST be called before returning or calling stopSelf().
+        // Calling startForeground() first satisfies the Android OS watchdog and prevents
+        // Fatal ForegroundServiceDidNotStartInTimeException crashes across Android 8 through 15.
         val notification = buildForegroundNotification()
 
         val hasMicPermission = ContextCompat.checkSelfPermission(
@@ -114,17 +115,38 @@ class PoxiVoiceService : Service() {
                     notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 )
-            } else {
+            } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(NOTIFICATION_ID, notification)
+            } else {
+                Log.w(TAG, "Cannot start microphone foreground service on API 34+ without RECORD_AUDIO permission")
+                _isServiceActive.value = false
+                stopSelf()
+                return START_NOT_STICKY
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to startForeground with microphone type, falling back", e)
-            try {
-                startForeground(NOTIFICATION_ID, notification)
-            } catch (_: Exception) {}
+            Log.e(TAG, "Failed to startForeground: ${e.javaClass.simpleName}: ${e.message}", e)
+            _isServiceActive.value = false
+            stopSelf()
+            return START_NOT_STICKY
         }
 
-        return START_STICKY
+        // If stop was requested before service started, cleanly stop foreground and exit
+        if (isStopRequested) {
+            Log.d(TAG, "Stop requested in PoxiVoiceService")
+            _isServiceActive.value = false
+            stopForegroundCompat()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (action != ACTION_START) {
+            stopForegroundCompat()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        _isServiceActive.value = true
+        return START_NOT_STICKY
     }
 
     private fun createNotificationChannel() {
@@ -166,11 +188,11 @@ class PoxiVoiceService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Poxi Voice Assistant Active")
             .setContentText("Listening for your voice commands • Tap to open")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_poxi_notification)
             .setOngoing(true)
             .setContentIntent(openAppPendingIntent)
             .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
+                R.drawable.ic_poxi_stop,
                 "Stop Voice Mode",
                 stopPendingIntent
             )

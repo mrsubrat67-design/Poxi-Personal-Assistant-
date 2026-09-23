@@ -19,19 +19,19 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.OpenInBrowser
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -148,8 +148,8 @@ fun ActionCard(
     modifier: Modifier = Modifier
 ) {
     val (icon, tintColor, title) = when (action.functionName) {
-        "openWhatsApp" -> Triple(Icons.Outlined.Chat, Color(0xFF22C55E), "WhatsApp Action")
-        "openApp" -> Triple(Icons.Default.OpenInNew, Color(0xFF38BDF8), "App Action")
+        "openWhatsApp" -> Triple(Icons.AutoMirrored.Outlined.Chat, Color(0xFF22C55E), "WhatsApp Action")
+        "openApp" -> Triple(Icons.AutoMirrored.Filled.OpenInNew, Color(0xFF38BDF8), "App Action")
         "makeCall" -> Triple(Icons.Default.Call, Color(0xFF10B981), "Phone Call")
         "callContact" -> Triple(Icons.Default.Phone, Color(0xFFA855F7), "Contact Call")
         "openUrl" -> Triple(Icons.Default.OpenInBrowser, Color(0xFFF59E0B), "Web Link")

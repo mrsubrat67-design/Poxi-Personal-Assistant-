@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-class PoxiViewModel(
+class PoxiViewModel @JvmOverloads constructor(
     application: Application,
     val actionBridge: AndroidActionBridge = AndroidActionBridge(application),
     val geminiService: GeminiService = GeminiService(actionBridge),
@@ -164,11 +164,8 @@ class PoxiViewModel(
                 } else {
                     "Poxi needs microphone access to listen to your voice and talk back."
                 },
-                statusMessage = if (!micGranted) "Microphone permission is required" else "Microphone permission granted"
+                statusMessage = if (!micGranted) "Microphone permission is required" else "Microphone access ready • Tap mic to start"
             )
-        }
-        if (micGranted && !_uiState.value.isVoiceSessionActive) {
-            startVoiceSession()
         }
     }
 
@@ -266,7 +263,6 @@ class PoxiViewModel(
             )
         }
         speechInputManager.stopListening()
-        speechInputManager.destroy()
         voiceOutputManager.stop()
         PoxiVoiceService.stop(context)
     }
@@ -315,49 +311,64 @@ class PoxiViewModel(
         }
 
         viewModelScope.launch {
-            val keyToUse = _uiState.value.apiKey
-            val result = geminiService.processUserTurn(trimmed, keyToUse)
+            try {
+                val keyToUse = _uiState.value.apiKey
+                val result = geminiService.processUserTurn(trimmed, keyToUse)
 
-            when (result) {
-                is GeminiTurnResult.Success -> {
-                    val assistantMsg = ChatMessage(
-                        role = MessageRole.ASSISTANT,
-                        text = result.spokenText,
-                        audioBytes = result.audioBytes,
-                        toolAction = result.toolAction,
-                        detectedLanguage = result.detectedLanguage
-                    )
+                when (result) {
+                    is GeminiTurnResult.Success -> {
+                        val assistantMsg = ChatMessage(
+                            role = MessageRole.ASSISTANT,
+                            text = result.spokenText,
+                            audioBytes = result.audioBytes,
+                            toolAction = result.toolAction,
+                            detectedLanguage = result.detectedLanguage
+                        )
 
-                    _uiState.update { state ->
-                        state.copy(
-                            messages = state.messages + assistantMsg,
-                            isProcessing = false,
-                            lastExecutedAction = result.toolAction,
-                            pendingContactDisambiguation = result.pendingContacts,
-                            currentLanguage = result.detectedLanguage ?: state.currentLanguage,
-                            statusMessage = if (result.toolAction != null) "Action executed: ${result.toolAction.summary}" else "Poxi responded"
+                        _uiState.update { state ->
+                            state.copy(
+                                messages = state.messages + assistantMsg,
+                                isProcessing = false,
+                                lastExecutedAction = result.toolAction,
+                                pendingContactDisambiguation = result.pendingContacts,
+                                currentLanguage = result.detectedLanguage ?: state.currentLanguage,
+                                statusMessage = if (result.toolAction != null) "Action executed: ${result.toolAction.summary}" else "Poxi responded"
+                            )
+                        }
+
+                        // Speak out Poxi's response
+                        voiceOutputManager.speak(
+                            text = result.spokenText,
+                            audioBytes = result.audioBytes,
+                            languageHint = result.detectedLanguage
                         )
                     }
-
-                    // Speak out Poxi's response
-                    voiceOutputManager.speak(
-                        text = result.spokenText,
-                        audioBytes = result.audioBytes,
-                        languageHint = result.detectedLanguage
-                    )
+                    is GeminiTurnResult.Error -> {
+                        val errorMsg = ChatMessage(
+                            role = MessageRole.ASSISTANT,
+                            text = "I encountered an error: ${result.message}"
+                        )
+                        _uiState.update { state ->
+                            state.copy(
+                                messages = state.messages + errorMsg,
+                                isProcessing = false,
+                                statusMessage = "Error processing request"
+                            )
+                        }
+                    }
                 }
-                is GeminiTurnResult.Error -> {
-                    val errorMsg = ChatMessage(
-                        role = MessageRole.ASSISTANT,
-                        text = "I encountered an error: ${result.message}"
+            } catch (e: Exception) {
+                android.util.Log.e("PoxiViewModel", "Error in processUserInput: ${e.javaClass.simpleName}: ${e.message}", e)
+                val errorMsg = ChatMessage(
+                    role = MessageRole.ASSISTANT,
+                    text = "Connection issue. Please try again."
+                )
+                _uiState.update { state ->
+                    state.copy(
+                        messages = state.messages + errorMsg,
+                        isProcessing = false,
+                        statusMessage = "Could not process request"
                     )
-                    _uiState.update { state ->
-                        state.copy(
-                            messages = state.messages + errorMsg,
-                            isProcessing = false,
-                            statusMessage = "Error processing request"
-                        )
-                    }
                 }
             }
         }

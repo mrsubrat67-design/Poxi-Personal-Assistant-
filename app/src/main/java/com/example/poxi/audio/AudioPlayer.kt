@@ -30,12 +30,16 @@ class AudioPlayer(private val context: Context) {
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    private var audioFocusRequest: AudioFocusRequest? = null
+    private var audioFocusRequest: Any? = null
 
     private var audioTrack: AudioTrack? = null
     private var mediaPlayer: MediaPlayer? = null
     private var playbackJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Default)
+
+    private val exceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "Uncaught coroutine exception in AudioPlayer: ${throwable.javaClass.simpleName}: ${throwable.message}", throwable)
+    }
+    private val scope = CoroutineScope(Dispatchers.Default + exceptionHandler)
 
     var onPlaybackStarted: (() -> Unit)? = null
     var onPlaybackFinished: (() -> Unit)? = null
@@ -49,13 +53,19 @@ class AudioPlayer(private val context: Context) {
         if (audioManager == null) return true
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val usage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    AudioAttributes.USAGE_ASSISTANT
+                } else {
+                    AudioAttributes.USAGE_MEDIA
+                }
                 val attributes = AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setUsage(usage)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
                 val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
                     .setAudioAttributes(attributes)
                     .setAcceptsDelayedFocusGain(false)
+                    .setOnAudioFocusChangeListener { /* transient focus change */ }
                     .build()
                 audioFocusRequest = request
                 audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
@@ -63,7 +73,7 @@ class AudioPlayer(private val context: Context) {
                 @Suppress("DEPRECATION")
                 audioManager.requestAudioFocus(
                     null,
-                    AudioManager.STREAM_VOICE_CALL,
+                    AudioManager.STREAM_MUSIC,
                     AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
                 ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
             }
@@ -76,7 +86,7 @@ class AudioPlayer(private val context: Context) {
     private fun abandonAudioFocus() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                audioFocusRequest?.let { audioManager?.abandonAudioFocusRequest(it) }
+                (audioFocusRequest as? AudioFocusRequest)?.let { audioManager?.abandonAudioFocusRequest(it) }
                 audioFocusRequest = null
             } else {
                 @Suppress("DEPRECATION")
@@ -91,6 +101,10 @@ class AudioPlayer(private val context: Context) {
      */
     fun playPcm(pcmBytes: ByteArray, sampleRate: Int = DEFAULT_SAMPLE_RATE) {
         stop()
+
+        if (pcmBytes.isEmpty()) {
+            return
+        }
 
         playbackJob = scope.launch {
             var track: AudioTrack? = null
@@ -107,28 +121,51 @@ class AudioPlayer(private val context: Context) {
                     AudioFormat.ENCODING_PCM_16BIT
                 )
 
-                val bufferSize = maxOf(minBufferSize, pcmBytes.size)
+                // Safe streaming buffer size that complies with Android Audio HAL limits
+                val bufferSize = if (minBufferSize > 0) maxOf(minBufferSize * 2, 4096) else 8192
 
-                track = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(bufferSize)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
+                try {
+                    val usage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        AudioAttributes.USAGE_ASSISTANT
+                    } else {
+                        AudioAttributes.USAGE_MEDIA
+                    }
+                    track = AudioTrack.Builder()
+                        .setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(usage)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        )
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(sampleRate)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .build()
+                        )
+                        .setBufferSizeInBytes(bufferSize)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build()
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Failed to instantiate AudioTrack: ${t.javaClass.simpleName}: ${t.message}", t)
+                    return@launch
+                }
+
+                if (track.state != AudioTrack.STATE_INITIALIZED) {
+                    Log.e(TAG, "AudioTrack uninitialized (state=${track.state})")
+                    track.release()
+                    track = null
+                    return@launch
+                }
 
                 audioTrack = track
-                track.play()
+                try {
+                    track.play()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start AudioTrack playback: ${e.javaClass.simpleName}: ${e.message}", e)
+                    return@launch
+                }
 
                 val totalFrames = pcmBytes.size / 2 // 16-bit mono = 2 bytes per frame
                 val chunkSize = 2048
@@ -169,15 +206,20 @@ class AudioPlayer(private val context: Context) {
                 }
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error playing PCM audio", e)
+                Log.e(TAG, "Error playing PCM audio: ${e.javaClass.simpleName}: ${e.message}", e)
             } finally {
-                withContext(Dispatchers.Main) {
-                    cleanupTrack(track)
-                    isPlaying = false
-                    abandonAudioFocus()
-                    VoiceLogger.logAudioOutputStop()
-                    onAmplitudeUpdated?.invoke(0f)
-                    onPlaybackFinished?.invoke()
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    withContext(Dispatchers.Main) {
+                        cleanupTrack(track)
+                        val shouldNotifyFinished = isPlaying
+                        isPlaying = false
+                        abandonAudioFocus()
+                        VoiceLogger.logAudioOutputStop()
+                        onAmplitudeUpdated?.invoke(0f)
+                        if (shouldNotifyFinished) {
+                            onPlaybackFinished?.invoke()
+                        }
+                    }
                 }
             }
         }
@@ -202,9 +244,14 @@ class AudioPlayer(private val context: Context) {
 
                     mediaPlayer = MediaPlayer().apply {
                         setDataSource(tempFile.absolutePath)
+                        val usage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            AudioAttributes.USAGE_ASSISTANT
+                        } else {
+                            AudioAttributes.USAGE_MEDIA
+                        }
                         setAudioAttributes(
                             AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                                .setUsage(usage)
                                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                                 .build()
                         )

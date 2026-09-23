@@ -377,6 +377,12 @@ class AndroidActionBridge(private val context: Context) {
         }
 
         val cleanQuery = contactName.trim()
+        if (cleanQuery.isBlank()) {
+            return CallContactOutcome.NotFound(
+                query = "",
+                message = "Please specify a contact name to call."
+            )
+        }
         val expandedQueries = getRelationshipQueries(cleanQuery)
 
         val matches = queryContacts(expandedQueries)
@@ -404,20 +410,26 @@ class AndroidActionBridge(private val context: Context) {
     }
 
     private fun getRelationshipQueries(input: String): List<String> {
-        val lower = input.lowercase()
+        val lower = input.lowercase().trim()
         val queries = mutableListOf(input)
+        val tokens = lower.split(Regex("[\\s,.-]+")).filter { it.isNotBlank() }
+
+        fun matchesAny(aliases: List<String>): Boolean {
+            return aliases.any { alias ->
+                val aliasLower = alias.lowercase()
+                lower == aliasLower || tokens.contains(aliasLower)
+            }
+        }
 
         val momAliases = listOf("mom", "mummy", "mother", "maa", "mataji", "ammi", "माँ", "मम्मी", "माताजी", "माता")
         val dadAliases = listOf("dad", "papa", "father", "pitaji", "abbu", "पापा", "पिताजी", "पिता")
         val brotherAliases = listOf("brother", "bro", "bhai", "bhaiya", "भाई", "भैया", "भाया")
         val sisterAliases = listOf("sister", "sis", "behen", "didi", "दीदी", "बहन")
 
-        when {
-            momAliases.any { lower.contains(it) } -> queries.addAll(listOf("Mom", "Mummy", "Mother", "Maa", "मम्मी", "माँ"))
-            dadAliases.any { lower.contains(it) } -> queries.addAll(listOf("Dad", "Papa", "Father", "पापा", "पिताजी"))
-            brotherAliases.any { lower.contains(it) } -> queries.addAll(listOf("Bhai", "Bhaiya", "Brother", "भाई", "भैया"))
-            sisterAliases.any { lower.contains(it) } -> queries.addAll(listOf("Didi", "Behen", "Sister", "दीदी", "बहन"))
-        }
+        if (matchesAny(momAliases)) queries.addAll(listOf("Mom", "Mummy", "Mother", "Maa", "मम्मी", "माँ"))
+        if (matchesAny(dadAliases)) queries.addAll(listOf("Dad", "Papa", "Father", "पापा", "पिताजी"))
+        if (matchesAny(brotherAliases)) queries.addAll(listOf("Bhai", "Bhaiya", "Brother", "भाई", "भैया"))
+        if (matchesAny(sisterAliases)) queries.addAll(listOf("Didi", "Behen", "Sister", "दीदी", "बहन"))
 
         return queries.distinct()
     }

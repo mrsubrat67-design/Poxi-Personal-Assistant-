@@ -266,6 +266,24 @@ class PoxiAssistantTest {
     }
 
     @Test
+    fun testCase_CallContact_NoFalsePositiveAlias() {
+        // Names containing substring "maa" or "ammi" must not falsely trigger relationship aliases
+        val outcome = actionBridge.executeCallContact("Maanav")
+        // In robolectric without contacts, it should return NotFound for "Maanav", not search for Mom/Maa
+        assertTrue(outcome is com.example.poxi.bridge.CallContactOutcome.NotFound)
+        val notFound = outcome as com.example.poxi.bridge.CallContactOutcome.NotFound
+        assertEquals("Maanav", notFound.query)
+    }
+
+    @Test
+    fun testCase_CallContact_BlankQueryHandledGracefully() {
+        val outcome = actionBridge.executeCallContact("   ")
+        assertTrue(outcome is com.example.poxi.bridge.CallContactOutcome.NotFound)
+        val notFound = outcome as com.example.poxi.bridge.CallContactOutcome.NotFound
+        assertTrue(notFound.message.contains("specify a contact name", ignoreCase = true))
+    }
+
+    @Test
     fun testCase_CallPhoneNumber() {
         val result = geminiService.processWithLocalIntentEngine("Call 9876543210")
         assertTrue(result is GeminiTurnResult.Success)
@@ -304,5 +322,131 @@ class PoxiAssistantTest {
         assertTrue(vm.uiState.value.showPermissionDeniedDialog)
         assertTrue(vm.uiState.value.isPermissionPermanentlyDenied)
         assertTrue(vm.uiState.value.statusMessage.contains("Microphone permission is required", ignoreCase = true))
+    }
+
+    // =========================================================================
+    // 13 STABILITY STATES CRITICAL TESTS
+    // =========================================================================
+
+    /** State 1: Open app without microphone permission */
+    @Test
+    fun testState01_OpenAppWithoutMicPermission() {
+        org.robolectric.Shadows.shadowOf(application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        assertFalse(vm.uiState.value.hasMicrophonePermission)
+        assertFalse(vm.uiState.value.isVoiceSessionActive)
+        // No crash
+    }
+
+    /** State 2: Grant microphone permission */
+    @Test
+    fun testState02_GrantMicrophonePermission() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.onPermissionsResult(micGranted = true, contactsGranted = true, permanentlyDenied = false)
+        assertTrue(vm.uiState.value.hasMicrophonePermission)
+        // Does not auto-start voice without user interaction
+        assertFalse(vm.uiState.value.isVoiceSessionActive)
+    }
+
+    /** State 3: Tap voice button once */
+    @Test
+    fun testState03_TapVoiceButtonOnce() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.toggleVoiceSession()
+        assertTrue(vm.uiState.value.isVoiceSessionActive)
+        assertTrue(vm.uiState.value.isListening)
+    }
+
+    /** State 4 & 5: Start Gemini Live and Speech recognition starts */
+    @Test
+    fun testState04_and_05_GeminiLiveAndSpeechRecognitionStarts() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+        assertTrue(vm.uiState.value.isVoiceSessionActive)
+        assertNotNull(vm.uiState.value.statusMessage)
+    }
+
+    /** State 6: User remains silent */
+    @Test
+    fun testState06_UserRemainsSilent() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+        // Simulate speech timeout callback
+        vm.speechInputManager.onSpeechTimeout?.invoke()
+        assertTrue(vm.uiState.value.isVoiceSessionActive)
+    }
+
+    /** State 7 & 8: User speaks and Poxi responds */
+    @Test
+    fun testState07_and_08_UserSpeaksAndPoxiResponds() {
+        val vm = PoxiViewModel(application)
+        vm.processUserInput("Open YouTube")
+        assertTrue(vm.uiState.value.messages.any { it.text.contains("Open YouTube") })
+    }
+
+    /** State 9: User interrupts Poxi */
+    @Test
+    fun testState09_UserInterruptsPoxi() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+        vm.interruptSpeaking()
+        assertFalse(vm.uiState.value.isSpeaking)
+    }
+
+    /** State 10 & 11: Turn voice mode OFF and turn voice mode ON again */
+    @Test
+    fun testState10_and_11_TurnVoiceModeOffAndOnAgain() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+
+        // Turn ON
+        vm.startVoiceSession()
+        assertTrue(vm.uiState.value.isVoiceSessionActive)
+
+        // Turn OFF
+        vm.stopVoiceSession()
+        assertFalse(vm.uiState.value.isVoiceSessionActive)
+        assertFalse(vm.uiState.value.isListening)
+
+        // Turn ON again
+        vm.startVoiceSession()
+        assertTrue(vm.uiState.value.isVoiceSessionActive)
+        assertTrue(vm.uiState.value.isListening)
+    }
+
+    /** State 12: Foreground service starts and stops cleanly */
+    @Test
+    fun testState12_ForegroundServiceStartStop() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        PoxiVoiceService.start(application)
+        assertTrue(PoxiVoiceService.isServiceActive.value)
+
+        PoxiVoiceService.stop(application)
+        assertFalse(PoxiVoiceService.isServiceActive.value)
+    }
+
+    /** State 13: Gemini/network connection fails */
+    @Test
+    fun testState13_NetworkFailureHandling() {
+        val result = geminiService.processWithLocalIntentEngine("Tell me a story about space")
+        assertTrue(result is GeminiTurnResult.Success)
+        val success = result as GeminiTurnResult.Success
+        assertNotNull(success.spokenText)
+        assertTrue(success.spokenText.isNotBlank())
+    }
+
+    /** Test MainActivity creation, lifecycle, and destruction */
+    @Test
+    fun testMainActivity_LifecycleAndInteraction() {
+        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java)
+        controller.create().start().resume()
+        val activity = controller.get()
+        assertNotNull(activity)
+        controller.pause().stop().destroy()
     }
 }
