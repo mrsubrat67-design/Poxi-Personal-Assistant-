@@ -51,7 +51,10 @@ class PoxiViewModel @JvmOverloads constructor(
             it.copy(
                 hasMicrophonePermission = hasMicPermission,
                 hasContactsPermission = hasContacts,
-                hasPhoneCallPermission = hasCallPhone
+                hasPhoneCallPermission = hasCallPhone,
+                isTtsReady = voiceOutputManager.isTtsReady,
+                speechRate = voiceOutputManager.speechRate,
+                speechPitch = voiceOutputManager.speechPitch
             )
         }
 
@@ -76,6 +79,7 @@ class PoxiViewModel @JvmOverloads constructor(
                 it.copy(
                     sessionState = if (it.isVoiceSessionActive) VoiceSessionState.LISTENING else VoiceSessionState.IDLE,
                     isSpeaking = false,
+                    isListening = it.isVoiceSessionActive,
                     statusMessage = if (it.isVoiceSessionActive) "Listening for your reply..." else "Ready"
                 )
             }
@@ -83,17 +87,21 @@ class PoxiViewModel @JvmOverloads constructor(
             if (_uiState.value.isVoiceSessionActive && !_uiState.value.isProcessing) {
                 autoRestartJob?.cancel()
                 autoRestartJob = viewModelScope.launch {
-                    delay(150)
+                    delay(100)
                     if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
                         _uiState.update { it.copy(sessionState = VoiceSessionState.LISTENING, isListening = true) }
-                        speechInputManager.startListening()
+                        speechInputManager.resumeListening()
                     }
                 }
             }
         }
 
-        voiceOutputManager.audioPlayer.onAmplitudeUpdated = { amp ->
+        voiceOutputManager.onAmplitudeUpdated = { amp ->
             _uiState.update { it.copy(audioAmplitude = amp) }
+        }
+
+        voiceOutputManager.onTtsReadyChanged = { ready ->
+            _uiState.update { it.copy(isTtsReady = ready) }
         }
 
         // Setup Speech Recognition callbacks
@@ -117,14 +125,10 @@ class PoxiViewModel @JvmOverloads constructor(
         }
 
         speechInputManager.onSpeechTimeout = {
-            // Continuous session: normal silence handled internally without toggling microphone off in UI
+            // Continuous session: silence handled internally without toggling microphone off in UI
             if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
-                autoRestartJob?.cancel()
-                autoRestartJob = viewModelScope.launch {
-                    delay(500)
-                    if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing && !speechInputManager.isListening) {
-                        speechInputManager.startListening()
-                    }
+                _uiState.update {
+                    if (it.isVoiceSessionActive) it.copy(sessionState = VoiceSessionState.LISTENING, isListening = true) else it
                 }
             }
         }
@@ -140,10 +144,19 @@ class PoxiViewModel @JvmOverloads constructor(
         }
 
         speechInputManager.onError = { errorMsg ->
-            _uiState.update {
-                it.copy(
-                    statusMessage = errorMsg
-                )
+            if (errorMsg.contains("permission", ignoreCase = true)) {
+                _uiState.update {
+                    it.copy(
+                        sessionState = VoiceSessionState.ERROR,
+                        isVoiceSessionActive = false,
+                        isListening = false,
+                        statusMessage = errorMsg
+                    )
+                }
+            } else {
+                _uiState.update {
+                    it.copy(statusMessage = errorMsg)
+                }
             }
         }
 
@@ -310,6 +323,7 @@ class PoxiViewModel @JvmOverloads constructor(
             it.copy(
                 sessionState = if (it.isVoiceSessionActive) VoiceSessionState.LISTENING else VoiceSessionState.IDLE,
                 isSpeaking = false,
+                isListening = it.isVoiceSessionActive,
                 statusMessage = "Listening for your command..."
             )
         }
@@ -318,7 +332,7 @@ class PoxiViewModel @JvmOverloads constructor(
                 delay(100)
                 if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking) {
                     _uiState.update { it.copy(sessionState = VoiceSessionState.LISTENING, isListening = true) }
-                    speechInputManager.startListening()
+                    speechInputManager.resumeListening()
                 }
             }
         }
@@ -326,7 +340,7 @@ class PoxiViewModel @JvmOverloads constructor(
 
     fun processUserInput(input: String) {
         val trimmed = input.trim()
-        if (trimmed.isBlank()) return
+        if (trimmed.isBlank() || _uiState.value.isProcessing) return
 
         // If currently speaking, stop immediately
         autoRestartJob?.cancel()
@@ -392,8 +406,19 @@ class PoxiViewModel @JvmOverloads constructor(
                             state.copy(
                                 messages = state.messages + errorMsg,
                                 isProcessing = false,
-                                statusMessage = "Error processing request"
+                                sessionState = if (state.isVoiceSessionActive) VoiceSessionState.LISTENING else VoiceSessionState.IDLE,
+                                isListening = state.isVoiceSessionActive,
+                                statusMessage = if (state.isVoiceSessionActive) "Listening... speak anytime" else "Error processing request"
                             )
+                        }
+                        if (_uiState.value.isVoiceSessionActive) {
+                            autoRestartJob?.cancel()
+                            autoRestartJob = viewModelScope.launch {
+                                delay(150)
+                                if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
+                                    speechInputManager.resumeListening()
+                                }
+                            }
                         }
                     }
                 }
@@ -407,8 +432,19 @@ class PoxiViewModel @JvmOverloads constructor(
                     state.copy(
                         messages = state.messages + errorMsg,
                         isProcessing = false,
-                        statusMessage = "Could not process request"
+                        sessionState = if (state.isVoiceSessionActive) VoiceSessionState.LISTENING else VoiceSessionState.IDLE,
+                        isListening = state.isVoiceSessionActive,
+                        statusMessage = if (state.isVoiceSessionActive) "Listening... speak anytime" else "Could not process request"
                     )
+                }
+                if (_uiState.value.isVoiceSessionActive) {
+                    autoRestartJob?.cancel()
+                    autoRestartJob = viewModelScope.launch {
+                        delay(150)
+                        if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
+                            speechInputManager.resumeListening()
+                        }
+                    }
                 }
             }
         }
@@ -439,6 +475,21 @@ class PoxiViewModel @JvmOverloads constructor(
 
     fun updateApiKey(newKey: String) {
         _uiState.update { it.copy(apiKey = newKey.trim()) }
+    }
+
+    fun setSpeechRate(rate: Float) {
+        voiceOutputManager.speechRate = rate
+        _uiState.update { it.copy(speechRate = rate) }
+    }
+
+    fun setSpeechPitch(pitch: Float) {
+        voiceOutputManager.speechPitch = pitch
+        _uiState.update { it.copy(speechPitch = pitch) }
+    }
+
+    fun testTtsVoice(sampleText: String, languageHint: String? = null) {
+        autoRestartJob?.cancel()
+        voiceOutputManager.speak(text = sampleText, languageHint = languageHint, preferTts = true)
     }
 
     fun clearMessages() {

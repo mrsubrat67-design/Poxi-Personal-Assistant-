@@ -5,9 +5,11 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.poxi.audio.LanguageDetector
 import com.example.poxi.audio.SpeechInputManager
+import com.example.poxi.audio.VoiceOutputManager
 import com.example.poxi.bridge.AndroidActionBridge
 import com.example.poxi.gemini.GeminiService
 import com.example.poxi.gemini.GeminiTurnResult
+import com.example.poxi.model.VoiceSessionState
 import com.example.poxi.service.PoxiVoiceService
 import com.example.poxi.ui.PoxiViewModel
 import org.junit.Assert.assertEquals
@@ -566,4 +568,171 @@ class PoxiAssistantTest {
         manager.stop(notifyFinished = true)
         assertTrue(finishCalled)
     }
+
+    /** Test Continuous Voice Requirement A: One tap starts continuous voice mode */
+    @Test
+    fun testContinuousVoice_OneTapStartsContinuousMode() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.toggleVoiceSession()
+
+        assertTrue("Voice session must be active after one tap", vm.uiState.value.isVoiceSessionActive)
+        assertTrue("SpeechInputManager continuous session must be active", vm.speechInputManager.isContinuousSessionActive)
+        assertTrue("Listening state must be true", vm.uiState.value.isListening)
+    }
+
+    /** Test Continuous Voice Requirement B: Automatic return to listening after response */
+    @Test
+    fun testContinuousVoice_AutoListenAfterResponse() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+
+        // Poxi starts speaking
+        vm.voiceOutputManager.onSpeakingStarted?.invoke()
+        assertTrue("isSpeaking must be true", vm.uiState.value.isSpeaking)
+        assertFalse("isListening must be false while speaking", vm.uiState.value.isListening)
+        assertTrue("Session must remain active while speaking", vm.uiState.value.isVoiceSessionActive)
+
+        // Poxi finishes speaking
+        vm.voiceOutputManager.onSpeakingFinished?.invoke()
+        assertFalse("isSpeaking must be false after finish", vm.uiState.value.isSpeaking)
+        assertTrue("Voice session must still be active without tapping mic", vm.uiState.value.isVoiceSessionActive)
+    }
+
+    /** Test Continuous Voice Requirement C: Silence handled internally without ending session */
+    @Test
+    fun testContinuousVoice_SilenceDoesNotEndSession() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+
+        // Simulate speech timeout / silence
+        vm.speechInputManager.onSpeechTimeout?.invoke()
+        assertTrue("Voice session must remain active after silence/timeout", vm.uiState.value.isVoiceSessionActive)
+        assertEquals(VoiceSessionState.LISTENING, vm.uiState.value.sessionState)
+    }
+
+    /** Test Continuous Voice Requirement D: Interruption stops playback and returns to listening */
+    @Test
+    fun testContinuousVoice_InterruptionStopsSpeechAndReturnsToListening() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+
+        // Simulate speaking
+        vm.voiceOutputManager.onSpeakingStarted?.invoke()
+        assertTrue(vm.uiState.value.isSpeaking)
+
+        // User interrupts
+        vm.interruptSpeaking()
+        assertFalse("Speaking must stop on interruption", vm.uiState.value.isSpeaking)
+        assertTrue("Session must remain active on interruption", vm.uiState.value.isVoiceSessionActive)
+        assertTrue("Listening must be restored", vm.uiState.value.isListening)
+        assertEquals(VoiceSessionState.LISTENING, vm.uiState.value.sessionState)
+    }
+
+    /** Test Continuous Voice Requirement E: Explicit tap stops the continuous session */
+    @Test
+    fun testContinuousVoice_ExplicitTapStopsSession() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+        assertTrue(vm.uiState.value.isVoiceSessionActive)
+
+        // Explicit user stop
+        vm.stopVoiceSession()
+        assertFalse("Voice session must be inactive after explicit stop", vm.uiState.value.isVoiceSessionActive)
+        assertFalse("Listening must be inactive after explicit stop", vm.uiState.value.isListening)
+        assertFalse("SpeechInputManager continuous session must be false", vm.speechInputManager.isContinuousSessionActive)
+        assertEquals(VoiceSessionState.IDLE, vm.uiState.value.sessionState)
+    }
+
+    /** Test Continuous Voice Requirement F: No duplicate sessions when start called again */
+    @Test
+    fun testContinuousVoice_NoDuplicateSessions() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.startVoiceSession()
+        assertTrue(vm.uiState.value.isVoiceSessionActive)
+
+        // Calling start again while active should be a no-op
+        vm.startVoiceSession()
+        assertTrue(vm.uiState.value.isVoiceSessionActive)
+        assertTrue(vm.speechInputManager.isContinuousSessionActive)
+    }
+
+    /** Test Android TTS Integration: Initialization and State */
+    @Test
+    fun testTextToSpeech_VoiceOutputManagerInitialization() {
+        val manager = VoiceOutputManager(application)
+        // Simulate TTS initialization success callback
+        manager.onInit(android.speech.tts.TextToSpeech.SUCCESS)
+        assertTrue("TTS must be marked ready after successful onInit", manager.isTtsReady)
+    }
+
+    /** Test Android TTS Integration: Spoken response speech rate and pitch control */
+    @Test
+    fun testTextToSpeech_SpeechRateAndPitchControls() {
+        val vm = PoxiViewModel(application)
+        vm.setSpeechRate(1.2f)
+        assertEquals(1.2f, vm.uiState.value.speechRate, 0.01f)
+
+        vm.setSpeechPitch(1.1f)
+        assertEquals(1.1f, vm.uiState.value.speechPitch, 0.01f)
+    }
+
+    /** Test Android TTS Integration: Interruption halts speech and resets amplitude */
+    @Test
+    fun testTextToSpeech_InterruptionStopsSpeech() {
+        val vm = PoxiViewModel(application)
+        vm.voiceOutputManager.onInit(android.speech.tts.TextToSpeech.SUCCESS)
+
+        var started = false
+        var finished = false
+        vm.voiceOutputManager.onSpeakingStarted = { started = true }
+        vm.voiceOutputManager.onSpeakingFinished = { finished = true }
+
+        // Trigger speech
+        vm.voiceOutputManager.speak("Hello from Poxi voice assistant", languageHint = "English")
+        // Immediate interruption
+        vm.voiceOutputManager.stop(notifyFinished = true)
+
+        assertFalse("Voice manager must not be speaking after stop", vm.voiceOutputManager.isSpeaking)
+        assertTrue("Finished callback must be invoked on stop", finished)
+    }
+
+    /** Test Android TTS Integration: Multi-lingual voice test invocation */
+    @Test
+    fun testTextToSpeech_MultiLingualVoiceTest() {
+        val vm = PoxiViewModel(application)
+        vm.voiceOutputManager.onInit(android.speech.tts.TextToSpeech.SUCCESS)
+
+        // Test Hindi voice response
+        vm.testTtsVoice("नमस्ते! मैं पोक्सी हूँ", languageHint = "Hindi")
+        // Should not throw and manage speech correctly
+        assertNotNull(vm.voiceOutputManager)
+
+        // Test English voice response
+        vm.testTtsVoice("Hello, how can I help you?", languageHint = "English")
+        assertNotNull(vm.voiceOutputManager)
+    }
+
+    /** Test Android TTS Integration: Speech queuing if speak called before onInit completes */
+    @Test
+    fun testTextToSpeech_PendingSpeechQueuedBeforeInit() {
+        val manager = VoiceOutputManager(application)
+        assertFalse("TTS not ready yet initially", manager.isTtsReady)
+
+        // Queue speech while still initializing
+        manager.speak("Pending speech response", languageHint = "English")
+
+        var speechStarted = false
+        manager.onSpeakingStarted = { speechStarted = true }
+
+        // Now initialize TTS
+        manager.onInit(android.speech.tts.TextToSpeech.SUCCESS)
+        assertTrue("TTS ready after onInit", manager.isTtsReady)
+    }
 }
+

@@ -50,6 +50,11 @@ class PoxiVoiceService : Service() {
                 return
             }
 
+            if (_isServiceActive.value) {
+                Log.d(TAG, "PoxiVoiceService is already active; skipping duplicate start")
+                return
+            }
+
             isStopRequested = false
             _isServiceActive.value = true
             try {

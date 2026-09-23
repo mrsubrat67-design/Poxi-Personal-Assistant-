@@ -30,5 +30,8 @@ data class PoxiUiState(
     val showPermissionDeniedDialog: Boolean = false,
     val permissionDialogTitle: String = "Microphone Permission Required",
     val permissionDialogMessage: String = "Poxi needs microphone access to listen to your voice commands.",
-    val isPermissionPermanentlyDenied: Boolean = false
+    val isPermissionPermanentlyDenied: Boolean = false,
+    val isTtsReady: Boolean = false,
+    val speechRate: Float = 1.0f,
+    val speechPitch: Float = 1.02f
 )

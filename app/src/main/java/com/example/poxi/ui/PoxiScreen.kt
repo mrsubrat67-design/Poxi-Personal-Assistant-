@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -100,6 +101,7 @@ fun PoxiScreen(
 
     var showKeyDialog by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
+    var showTtsVoiceDialog by remember { mutableStateOf(false) }
     var textInput by remember { mutableStateOf("") }
     var showKeyboardInput by remember { mutableStateOf(false) }
 
@@ -240,6 +242,17 @@ fun PoxiScreen(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { showTtsVoiceDialog = true },
+                        modifier = Modifier.testTag("tts_settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = "TTS Voice Settings",
+                            tint = if (uiState.isSpeaking) Color(0xFFA855F7) else Color(0xFF94A3B8)
+                        )
+                    }
+
                     IconButton(
                         onClick = { showInfoDialog = true },
                         modifier = Modifier.testTag("info_button")
@@ -495,7 +508,7 @@ fun PoxiScreen(
                         .shadow(12.dp, CircleShape)
                         .clip(CircleShape)
                         .background(
-                            if (uiState.isListening) {
+                            if (uiState.isVoiceSessionActive) {
                                 Brush.radialGradient(listOf(Color(0xFF22D3EE), Color(0xFF0891B2)))
                             } else {
                                 Brush.radialGradient(listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)))
@@ -517,15 +530,15 @@ fun PoxiScreen(
                                     micPermissionState.launchPermissionRequest()
                                 }
                             } else {
-                                viewModel.toggleListening()
+                                viewModel.toggleVoiceSession()
                             }
                         }
                         .testTag("mic_button"),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = if (uiState.isListening) Icons.Default.MicOff else Icons.Default.Mic,
-                        contentDescription = if (uiState.isListening) "Stop Listening" else "Start Speaking",
+                        imageVector = if (uiState.isVoiceSessionActive) Icons.Default.MicOff else Icons.Default.Mic,
+                        contentDescription = if (uiState.isVoiceSessionActive) "Stop Voice Session" else "Start Continuous Voice Session",
                         tint = Color.White,
                         modifier = Modifier.size(36.dp)
                     )
@@ -646,6 +659,152 @@ fun PoxiScreen(
                     Text("Close")
                 }
             }
+        )
+    }
+
+    // Android Text-to-Speech (TTS) Voice Engine Settings Dialog
+    if (showTtsVoiceDialog) {
+        AlertDialog(
+            onDismissRequest = { showTtsVoiceDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = null,
+                        tint = Color(0xFFA855F7),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Android TTS Engine", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    // Status row
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(if (uiState.isTtsReady) Color(0xFF22C55E) else Color(0xFFEAB308))
+                        )
+                        Text(
+                            text = if (uiState.isTtsReady) "Engine Status: Ready (Active)" else "Engine Status: Initializing...",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (uiState.isTtsReady) Color(0xFF4ADE80) else Color(0xFFFDE047)
+                        )
+                    }
+
+                    Text(
+                        text = "Android Text-to-Speech powers all spoken responses with low-latency on-device synthesis for Hindi, Hinglish, and English.",
+                        fontSize = 12.sp,
+                        color = Color(0xFF94A3B8),
+                        lineHeight = 16.sp
+                    )
+
+                    // Speech Rate selector
+                    Column {
+                        Text("Speech Speed (Rate)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFCBD5E1))
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(0.85f to "0.85x", 1.0f to "1.0x (Normal)", 1.15f to "1.15x").forEach { (rate, label) ->
+                                val isSelected = kotlin.math.abs(uiState.speechRate - rate) < 0.05f
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) Color(0xFF8B5CF6) else Color(0xFF1E293B),
+                                    modifier = Modifier.clickable { viewModel.setSpeechRate(rate) }
+                                ) {
+                                    Text(
+                                        text = label,
+                                        color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Test Voice Buttons
+                    Column {
+                        Text("Test Spoken Responses:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFCBD5E1))
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.testTtsVoice("Hello! I am Poxi, your personal voice AI assistant.", "English")
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .testTag("test_tts_english_button")
+                            ) {
+                                Text("English", fontSize = 11.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.testTtsVoice("नमस्ते! मैं पोक्सी हूँ, आपकी क्या मदद करूँ?", "Hindi")
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .testTag("test_tts_hindi_button")
+                            ) {
+                                Text("Hindi", fontSize = 11.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.testTtsVoice("Hello! Main Poxi hoon, aapki kya help kar sakti hoon?", "Hinglish")
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .testTag("test_tts_hinglish_button")
+                            ) {
+                                Text("Hinglish", fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    // Stop Speaking button if currently speaking
+                    if (uiState.isSpeaking) {
+                        Button(
+                            onClick = { viewModel.interruptSpeaking() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp)
+                                .testTag("stop_tts_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Stop Speaking", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showTtsVoiceDialog = false }) {
+                    Text("Done")
+                }
+            },
+            containerColor = Color(0xFF131B2E)
         )
     }
 
