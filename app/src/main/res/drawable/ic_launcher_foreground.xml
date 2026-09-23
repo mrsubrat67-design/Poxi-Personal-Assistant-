@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Poxi Core Glowing Sphere -->
+    <path
+        android:pathData="M54,34 A20,20 0 1,1 53.9,34 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="45"
+                android:startColor="#8B5CF6"
+                android:endColor="#06B6D4"
+                android:type="linear" />
+        </aapt:attr>
+    </path>
+    <!-- Inner glowing core -->
+    <path
+        android:pathData="M54,42 A12,12 0 1,1 53.9,42 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="90"
+                android:startColor="#EC4899"
+                android:endColor="#F472B6"
+                android:type="linear" />
+        </aapt:attr>
+    </path>
+    <!-- Sparkling highlight in orb -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillAlpha="0.75"
+        android:pathData="M50,45 A4,4 0 1,1 49.9,45 Z" />
+    
+    <!-- Sound Waves / Frequency bars -->
+    <path
+        android:fillColor="#00F5FF"
+        android:pathData="M27,48 C27,46.5 28.5,46.5 28.5,48 L28.5,60 C28.5,61.5 27,61.5 27,60 Z" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M33,42 C33,40.5 34.5,40.5 34.5,42 L34.5,66 C34.5,67.5 33,67.5 33,66 Z" />
+    <path
+        android:fillColor="#818CF8"
+        android:pathData="M39,36 C39,34.5 40.5,34.5 40.5,36 L40.5,72 C40.5,73.5 39,73.5 39,72 Z" />
+    <path
+        android:fillColor="#C084FC"
+        android:pathData="M68,36 C68,34.5 69.5,34.5 69.5,36 L69.5,72 C69.5,73.5 68,73.5 68,72 Z" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M74,42 C74,40.5 75.5,40.5 75.5,42 L75.5,66 C75.5,67.5 74,67.5 74,66 Z" />
+    <path
+        android:fillColor="#00F5FF"
+        android:pathData="M80,48 C80,46.5 81.5,46.5 81.5,48 L81.5,60 C81.5,61.5 80,61.5 80,60 Z" />
+
+    <!-- Sleek Microphone icon overlay at bottom-center of orb -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,46 C51.8,46 50,47.8 50,50 L50,58 C50,60.2 51.8,62 54,62 C56.2,62 58,60.2 58,58 L58,50 C58,47.8 56.2,46 54,46 Z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M46,55 C46,59.4 49.6,63 54,63 C58.4,63 62,59.4 62,55" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M54,63 L54,69 M49,69 L59,69" />
+
+    <!-- Dynamic Aura Wave Arc -->
+    <path
+        android:strokeColor="#A78BFA"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:strokeAlpha="0.6"
+        android:pathData="M30,30 C42,18 66,18 78,30" />
+    <path
+        android:strokeColor="#22D3EE"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:strokeAlpha="0.6"
+        android:pathData="M30,78 C42,90 66,90 78,78" />
+</vector>

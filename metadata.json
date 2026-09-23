@@ -1,0 +1,6 @@
+{
+  "name": "Poxi AI Assistant",
+  "description": "Multilingual voice AI assistant with real-time conversational voice, natural language understanding, and native Android app controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
