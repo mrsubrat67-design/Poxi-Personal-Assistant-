@@ -125,7 +125,10 @@ class AndroidActionBridge(private val context: Context) {
     }
 
     fun executeOpenApp(appName: String): BridgeResult {
-        val cleanName = appName.trim().lowercase()
+        val cleanName = appName.trim()
+            .replace(Regex("""[.,!?]"""), "")
+            .replace(Regex("""\s+"""), " ")
+            .lowercase()
         return try {
             when {
                 cleanName.contains("whatsapp") || cleanName.contains("व्हाट्सएप") || cleanName.contains("वॉट्सएप") || cleanName.contains("व्हाट्सएप्प") -> executeOpenWhatsApp()
@@ -159,11 +162,12 @@ class AndroidActionBridge(private val context: Context) {
             context.startActivity(launchIntent)
             BridgeResult(true, "YouTube opened successfully", target = "YouTube")
         } else {
-            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(webIntent)
-            BridgeResult(true, "Opened YouTube in browser", target = "YouTube")
+            BridgeResult(
+                success = false,
+                summary = "YouTube is not installed on this device",
+                detail = "Package com.google.android.youtube not found",
+                target = "YouTube"
+            )
         }
     }
 

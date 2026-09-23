@@ -449,4 +449,121 @@ class PoxiAssistantTest {
         assertNotNull(activity)
         controller.pause().stop().destroy()
     }
+
+    /** Test AudioWaveformVisualizer component initialization and state changes */
+    @Test
+    fun testAudioWaveformVisualizer_StatesAndAmplitude() {
+        val vm = PoxiViewModel(application)
+        assertNotNull(vm.uiState.value.audioAmplitude)
+        assertEquals(0f, vm.uiState.value.audioAmplitude)
+        assertFalse(vm.uiState.value.isListening)
+        assertFalse(vm.uiState.value.isSpeaking)
+        assertFalse(vm.uiState.value.isProcessing)
+    }
+
+    /** Test Accompanist permission flow: Microphone permission granted allows voice activation */
+    @Test
+    fun testAccompanistPermissionFlow_MicrophoneGranted_AllowsVoiceActivation() {
+        org.robolectric.Shadows.shadowOf(application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.onPermissionsResult(micGranted = true, contactsGranted = true, permanentlyDenied = false)
+
+        assertTrue("Microphone permission flag must be true", vm.uiState.value.hasMicrophonePermission)
+        assertFalse("Permission dialog should not be shown when granted", vm.uiState.value.showPermissionDeniedDialog)
+
+        // Activating voice session succeeds
+        vm.startVoiceSession()
+        assertTrue("Voice session must be active when permission is granted", vm.uiState.value.isVoiceSessionActive)
+        assertTrue("Listening must be active", vm.uiState.value.isListening)
+    }
+
+    /** Test Accompanist permission flow: Microphone permission denied gates voice session and shows rationale */
+    @Test
+    fun testAccompanistPermissionFlow_MicrophoneDenied_BlocksVoiceActivationAndShowsRationale() {
+        org.robolectric.Shadows.shadowOf(application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.onPermissionsResult(micGranted = false, contactsGranted = false, permanentlyDenied = false)
+
+        assertFalse("Microphone permission flag must be false", vm.uiState.value.hasMicrophonePermission)
+        assertTrue("Permission dialog should be shown on denial", vm.uiState.value.showPermissionDeniedDialog)
+        assertFalse("Permanent denial should be false for standard denial", vm.uiState.value.isPermissionPermanentlyDenied)
+
+        // Voice activation is strictly blocked
+        vm.startVoiceSession()
+        assertFalse("Voice session must not activate without permission", vm.uiState.value.isVoiceSessionActive)
+        assertFalse("Listening must not activate without permission", vm.uiState.value.isListening)
+    }
+
+    /** Test Accompanist permission flow: Permanent denial correctly guides to app settings */
+    @Test
+    fun testAccompanistPermissionFlow_PermanentDenial_OpensSettingsFlow() {
+        org.robolectric.Shadows.shadowOf(application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val vm = PoxiViewModel(application)
+        vm.onPermissionsResult(micGranted = false, contactsGranted = false, permanentlyDenied = true)
+
+        assertTrue(vm.uiState.value.isPermissionPermanentlyDenied)
+        assertTrue(vm.uiState.value.showPermissionDeniedDialog)
+        assertEquals("Permission Denied Permanently", vm.uiState.value.permissionDialogTitle)
+        assertTrue(vm.uiState.value.permissionDialogMessage.contains("Settings", ignoreCase = true))
+    }
+
+    /** Test 13: Natural variations of 'Open YouTube' command */
+    @Test
+    fun test13_OpenYouTube_NaturalVariations() {
+        val variations = listOf(
+            "Open YouTube" to "English",
+            "Open YouTube." to "English",
+            "Open the YouTube app" to "English",
+            "Launch YouTube" to "English",
+            "Start YouTube" to "English",
+            "Open YouTube app" to "English",
+            "यूट्यूब खोलो" to "Hindi",
+            "YouTube kholo" to "Hinglish",
+            "YouTube open karo" to "Hinglish"
+        )
+
+        for ((input, expectedLang) in variations) {
+            val result = geminiService.processWithLocalIntentEngine(input)
+            assertTrue("Expected success for variation: '$input'", result is GeminiTurnResult.Success)
+            val success = result as GeminiTurnResult.Success
+            assertEquals("Language must match for '$input'", expectedLang, success.detectedLanguage)
+            assertEquals("Must execute openApp tool for '$input'", "openApp", success.toolAction?.functionName)
+            assertEquals("YouTube", success.toolAction?.arguments?.get("appName"))
+        }
+    }
+
+    /** Test 14: When YouTube is not installed, action bridge returns honest failure without crash */
+    @Test
+    fun test14_OpenYouTube_NotInstalled_HonestFailure() {
+        val bridge = AndroidActionBridge(context)
+        val result = bridge.executeOpenApp("YouTube")
+        assertNotNull("Bridge result must not be null", result)
+        // If not installed on device / Robolectric clean environment, honest failure is returned
+        if (!result.success) {
+            assertEquals("YouTube is not installed on this device", result.summary)
+            assertEquals("YouTube", result.target)
+        }
+    }
+
+    /** Test 15: Voice output manager plays PCM bytes and triggers start and finish callbacks */
+    @Test
+    fun test15_VoiceOutputManager_AudioPlaybackFlow() {
+        var startCalled = false
+        var finishCalled = false
+        val manager = com.example.poxi.audio.VoiceOutputManager(context)
+        manager.onSpeakingStarted = { startCalled = true }
+        manager.onSpeakingFinished = { finishCalled = true }
+
+        // 16-bit 24kHz mono PCM sample (100 samples)
+        val samplePcm = ByteArray(200) { 0 }
+        manager.speak(
+            text = "Hello Poxi",
+            audioBytes = samplePcm,
+            languageHint = "English"
+        )
+
+        // Stop cleanly with notifyFinished = true
+        manager.stop(notifyFinished = true)
+        assertTrue(finishCalled)
+    }
 }

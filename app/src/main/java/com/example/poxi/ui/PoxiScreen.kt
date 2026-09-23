@@ -84,8 +84,12 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.poxi.permission.PermissionValidationLayer
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
+import com.google.accompanist.permissions.shouldShowRationale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun PoxiScreen(
     viewModel: PoxiViewModel,
@@ -102,30 +106,56 @@ fun PoxiScreen(
     val context = LocalContext.current
     val activity = context as? Activity
 
-    // Multi-permission launcher for Microphone and Contacts
-    val permissionsLauncher = rememberLauncherForActivityResult(
+    // Accompanist Permission State for Microphone Access
+    val micPermissionState = rememberPermissionState(
+        permission = Manifest.permission.RECORD_AUDIO
+    ) { isGranted ->
+        val contactsGranted = PermissionValidationLayer.hasContactsPermission(context)
+        val permanentlyDenied = !isGranted && activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(
+            activity,
+            Manifest.permission.RECORD_AUDIO
+        )
+        viewModel.onPermissionsResult(
+            micGranted = isGranted,
+            contactsGranted = contactsGranted,
+            permanentlyDenied = permanentlyDenied
+        )
+        if (isGranted) {
+            viewModel.startVoiceSession()
+        }
+    }
+
+    // Keep secondary system permissions (Contacts, Call Phone, Notifications) requested gracefully
+    val secondaryPermissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val mic = permissions[Manifest.permission.RECORD_AUDIO] == true
         val contacts = permissions[Manifest.permission.READ_CONTACTS] == true
-        val permanentlyDenied = if (!mic && activity != null) {
-            !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.RECORD_AUDIO)
-        } else {
-            false
+        viewModel.onPermissionsResult(
+            micGranted = micPermissionState.status.isGranted,
+            contactsGranted = contacts,
+            permanentlyDenied = uiState.isPermissionPermanentlyDenied
+        )
+    }
+
+    LaunchedEffect(micPermissionState.status.isGranted) {
+        if (micPermissionState.status.isGranted) {
+            viewModel.onPermissionsResult(
+                micGranted = true,
+                contactsGranted = PermissionValidationLayer.hasContactsPermission(context),
+                permanentlyDenied = false
+            )
         }
-        viewModel.onPermissionsResult(mic, contacts, permanentlyDenied)
     }
 
     LaunchedEffect(Unit) {
-        val permissions = mutableListOf(
-            Manifest.permission.RECORD_AUDIO,
+        val secondaryPermissions = mutableListOf(
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.CALL_PHONE
         )
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+            secondaryPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        permissionsLauncher.launch(permissions.toTypedArray())
+        secondaryPermissionsLauncher.launch(secondaryPermissions.toTypedArray())
     }
 
     // Scroll to bottom on new messages
@@ -201,20 +231,11 @@ fun PoxiScreen(
                             }
                         }
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Language,
-                                contentDescription = null,
-                                tint = Color(0xFF94A3B8),
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = uiState.currentLanguage,
-                                color = Color(0xFF94A3B8),
-                                fontSize = 11.sp
-                            )
-                        }
+                        Text(
+                            text = "Voice AI Assistant",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
                     }
                 }
 
@@ -256,7 +277,7 @@ fun PoxiScreen(
 
             // Robust Permissions Validation Banner if RECORD_AUDIO not granted
             AnimatedVisibility(
-                visible = !uiState.hasMicrophonePermission,
+                visible = !micPermissionState.status.isGranted,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -286,7 +307,11 @@ fun PoxiScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
-                                text = "Microphone permission required for Gemini voice session",
+                                text = if (micPermissionState.status.shouldShowRationale) {
+                                    "Microphone permission required for Gemini Live voice session"
+                                } else {
+                                    "Allow microphone access to converse with Poxi"
+                                },
                                 color = Color(0xFFFDE8E8),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
@@ -297,15 +322,7 @@ fun PoxiScreen(
                                 if (uiState.isPermissionPermanentlyDenied) {
                                     viewModel.openAppSettings()
                                 } else {
-                                    val permissions = mutableListOf(
-                                        Manifest.permission.RECORD_AUDIO,
-                                        Manifest.permission.READ_CONTACTS,
-                                        Manifest.permission.CALL_PHONE
-                                    )
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-                                    }
-                                    permissionsLauncher.launch(permissions.toTypedArray())
+                                    micPermissionState.launchPermissionRequest()
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
@@ -338,8 +355,21 @@ fun PoxiScreen(
                         isSpeaking = uiState.isSpeaking,
                         isProcessing = uiState.isProcessing,
                         amplitude = uiState.audioAmplitude,
-                        size = 100.dp,
+                        size = 96.dp,
                         modifier = Modifier.testTag("poxi_visualizer")
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    AudioWaveformVisualizer(
+                        amplitude = uiState.audioAmplitude,
+                        isListening = uiState.isListening,
+                        isSpeaking = uiState.isSpeaking,
+                        isProcessing = uiState.isProcessing,
+                        modifier = Modifier
+                            .fillMaxWidth(0.75f)
+                            .height(36.dp)
+                            .padding(horizontal = 8.dp)
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
@@ -376,17 +406,20 @@ fun PoxiScreen(
                     .testTag("conversation_list"),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (uiState.messages.isEmpty() && !micPermissionState.status.isGranted) {
+                    item {
+                        MicrophonePermissionRationaleCard(
+                            shouldShowRationale = micPermissionState.status.shouldShowRationale,
+                            isPermanentlyDenied = uiState.isPermissionPermanentlyDenied,
+                            onRequestPermission = { micPermissionState.launchPermissionRequest() },
+                            onOpenSettings = { viewModel.openAppSettings() }
+                        )
+                    }
+                }
                 items(uiState.messages, key = { it.id }) { message ->
                     MessageBubble(message = message)
                 }
             }
-
-            // Quick Voice Suggestion Chips
-            QuickSuggestionChips(
-                onChipClick = { suggestion ->
-                    viewModel.processUserInput(suggestion)
-                }
-            )
 
             // Keyboard input row (expandable)
             AnimatedVisibility(visible = showKeyboardInput) {
@@ -469,13 +502,11 @@ fun PoxiScreen(
                             }
                         )
                         .clickable {
-                            val micGranted = PermissionValidationLayer.hasRecordAudioPermission(context)
-                            if (!micGranted) {
-                                val isPermanentlyDenied = if (activity != null) {
-                                    !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.RECORD_AUDIO)
-                                } else {
-                                    false
-                                }
+                            if (!micPermissionState.status.isGranted) {
+                                val isPermanentlyDenied = activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(
+                                    activity,
+                                    Manifest.permission.RECORD_AUDIO
+                                )
                                 viewModel.onPermissionsResult(
                                     micGranted = false,
                                     contactsGranted = uiState.hasContactsPermission,
@@ -483,15 +514,7 @@ fun PoxiScreen(
                                 )
 
                                 if (!isPermanentlyDenied) {
-                                    val permissions = mutableListOf(
-                                        Manifest.permission.RECORD_AUDIO,
-                                        Manifest.permission.READ_CONTACTS,
-                                        Manifest.permission.CALL_PHONE
-                                    )
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-                                    }
-                                    permissionsLauncher.launch(permissions.toTypedArray())
+                                    micPermissionState.launchPermissionRequest()
                                 }
                             } else {
                                 viewModel.toggleListening()
@@ -689,15 +712,7 @@ fun PoxiScreen(
                             viewModel.openAppSettings()
                         } else {
                             viewModel.dismissPermissionDialog()
-                            val permissions = mutableListOf(
-                                Manifest.permission.RECORD_AUDIO,
-                                Manifest.permission.READ_CONTACTS,
-                                Manifest.permission.CALL_PHONE
-                            )
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                            permissionsLauncher.launch(permissions.toTypedArray())
+                            micPermissionState.launchPermissionRequest()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -719,5 +734,91 @@ fun PoxiScreen(
             containerColor = Color(0xFF131B2E),
             modifier = Modifier.testTag("permission_denied_dialog")
         )
+    }
+}
+
+/**
+ * Accompanist-powered Rationale Card displayed before activating the voice assistant.
+ * Informs the user why microphone access is required and provides direct action buttons.
+ */
+@Composable
+fun MicrophonePermissionRationaleCard(
+    shouldShowRationale: Boolean,
+    isPermanentlyDenied: Boolean,
+    onRequestPermission: () -> Unit,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .testTag("mic_permission_rationale_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+        border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f))
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF2E1065)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = "Microphone Required",
+                    tint = Color(0xFFA78BFA),
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
+            Text(
+                text = "Microphone Access Required",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+
+            Text(
+                text = if (isPermanentlyDenied) {
+                    "Microphone permission is blocked in system settings. Poxi requires microphone access to enable real-time speech interaction and Gemini Live voice sessions. Tap below to enable it under App Permissions."
+                } else if (shouldShowRationale) {
+                    "Poxi requires microphone access to listen to your voice commands, detect Hindi/English/Hinglish speech, and hold real-time conversational voice sessions."
+                } else {
+                    "Grant microphone permission to activate Poxi voice assistant and speak naturally in English, Hindi, or Hinglish."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF94A3B8),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+
+            Button(
+                onClick = {
+                    if (isPermanentlyDenied) {
+                        onOpenSettings()
+                    } else {
+                        onRequestPermission()
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isPermanentlyDenied) Color(0xFFE11D48) else Color(0xFF8B5CF6)
+                ),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("rationale_card_action_button")
+            ) {
+                Text(
+                    text = if (isPermanentlyDenied) "Open App Settings" else "Allow Microphone Access",
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
     }
 }

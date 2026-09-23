@@ -36,8 +36,8 @@ class GeminiService(
 
     companion object {
         private const val TAG = "GeminiService"
-        private const val PRIMARY_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-        private const val FALLBACK_MODEL = "gemini-2.5-flash"
+        private const val PRIMARY_MODEL = "gemini-3.5-flash"
+        private const val TTS_MODEL = "gemini-2.5-flash-preview-tts"
         private const val UNIFIED_VOICE_NAME = "Aoede" // Warm, expressive multilingual voice
     }
 
@@ -322,9 +322,11 @@ class GeminiService(
                 VoiceLogger.logResponseLanguage(detectedLang)
                 VoiceLogger.logGeminiSessionState("LIVE_TURN_COMPLETE")
 
+                finalAudio = generatePcmAudio(finalText.trim(), apiKey) ?: finalAudio
+
                 GeminiTurnResult.Success(
                     spokenText = finalText.trim(),
-                    audioBytes = finalAudio ?: audioBytes,
+                    audioBytes = finalAudio,
                     detectedLanguage = detectedLang,
                     toolAction = executionResult.toolAction,
                     pendingContacts = executionResult.pendingContacts
@@ -338,15 +340,28 @@ class GeminiService(
                 VoiceLogger.logResponseLanguage(detectedLang)
                 VoiceLogger.logGeminiSessionState("LIVE_TURN_COMPLETE")
 
+                val spokenText = initialText?.trim() ?: "Hello! I'm Poxi. How can I help you today?"
+                val spokenAudio = generatePcmAudio(spokenText, apiKey) ?: audioBytes
+
                 GeminiTurnResult.Success(
-                    spokenText = initialText ?: "I didn't quite catch that.",
-                    audioBytes = audioBytes,
+                    spokenText = spokenText,
+                    audioBytes = spokenAudio,
                     detectedLanguage = detectedLang
                 )
             }
         } catch (e: Exception) {
             Log.e(TAG, "Gemini API request failed, falling back to local engine", e)
-            processWithLocalIntentEngine(userInput, detectedType)
+            val fallback = processWithLocalIntentEngine(userInput, detectedType)
+            if (fallback is GeminiTurnResult.Success) {
+                val fallbackAudio = generatePcmAudio(fallback.spokenText, apiKey)
+                if (fallbackAudio != null) {
+                    fallback.copy(audioBytes = fallbackAudio)
+                } else {
+                    fallback
+                }
+            } else {
+                fallback
+            }
         }
     }
 
@@ -497,17 +512,6 @@ class GeminiService(
             put("tools", getToolDeclarations())
             put("generationConfig", JSONObject().apply {
                 put("temperature", 0.7)
-                put("responseModalities", JSONArray().apply {
-                    put("TEXT")
-                    put("AUDIO")
-                })
-                put("speechConfig", JSONObject().apply {
-                    put("voiceConfig", JSONObject().apply {
-                        put("prebuiltVoiceConfig", JSONObject().apply {
-                            put("voiceName", UNIFIED_VOICE_NAME)
-                        })
-                    })
-                })
             })
         }
 
@@ -520,40 +524,72 @@ class GeminiService(
         val responseBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
-            if (model == PRIMARY_MODEL) {
-                return callGeminiApiFallback(apiKey, FALLBACK_MODEL)
-            }
             throw RuntimeException("Gemini API error ${response.code}: $responseBody")
         }
 
         return JSONObject(responseBody)
     }
 
-    private fun callGeminiApiFallback(apiKey: String, model: String): JSONObject {
-        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+    suspend fun generatePcmAudio(text: String, apiKey: String): ByteArray? = withContext(Dispatchers.IO) {
+        if (text.isBlank() || apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") return@withContext null
+        try {
+            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$TTS_MODEL:generateContent?key=$apiKey"
+            val requestJson = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("text", text)
+                            })
+                        })
+                    })
+                })
+                put("generationConfig", JSONObject().apply {
+                    put("responseModalities", JSONArray().apply {
+                        put("AUDIO")
+                    })
+                    put("speechConfig", JSONObject().apply {
+                        put("voiceConfig", JSONObject().apply {
+                            put("prebuiltVoiceConfig", JSONObject().apply {
+                                put("voiceName", UNIFIED_VOICE_NAME)
+                            })
+                        })
+                    })
+                })
+            }
 
-        val requestJson = JSONObject().apply {
-            put("contents", JSONArray(conversationHistory))
-            put("systemInstruction", getSystemInstruction())
-            put("tools", getToolDeclarations())
-            put("generationConfig", JSONObject().apply {
-                put("temperature", 0.7)
-            })
+            val request = Request.Builder()
+                .url(endpoint)
+                .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (response.isSuccessful && responseBody.isNotBlank()) {
+                val root = JSONObject(responseBody)
+                val candidates = root.optJSONArray("candidates")
+                val candidate = candidates?.optJSONObject(0)
+                val content = candidate?.optJSONObject("content")
+                val parts = content?.optJSONArray("parts")
+                if (parts != null) {
+                    for (i in 0 until parts.length()) {
+                        val part = parts.getJSONObject(i)
+                        if (part.has("inlineData")) {
+                            val inline = part.getJSONObject("inlineData")
+                            val base64Data = inline.optString("data")
+                            if (base64Data.isNotBlank()) {
+                                return@withContext Base64.decode(base64Data, Base64.DEFAULT)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Log.w(TAG, "Gemini TTS returned code ${response.code}: $responseBody")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to generate PCM audio via Gemini Live TTS", e)
         }
-
-        val request = Request.Builder()
-            .url(endpoint)
-            .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-
-        val response = httpClient.newCall(request).execute()
-        val responseBody = response.body?.string() ?: ""
-
-        if (!response.isSuccessful) {
-            throw RuntimeException("Gemini API error ${response.code}: $responseBody")
-        }
-
-        return JSONObject(responseBody)
+        return@withContext null
     }
 
     /**
@@ -564,7 +600,10 @@ class GeminiService(
         input: String,
         explicitType: LanguageDetector.LanguageType? = null
     ): GeminiTurnResult {
-        val lower = input.trim().lowercase()
+        val normalized = input.trim()
+            .replace(Regex("""[.,!?]"""), "")
+            .replace(Regex("""\s+"""), " ")
+        val lower = normalized.lowercase()
         val langType = explicitType ?: LanguageDetector.detect(input)
         val lang = langType.label
 

@@ -16,6 +16,7 @@ import com.example.poxi.model.ContactItem
 import com.example.poxi.model.MessageRole
 import com.example.poxi.model.PoxiUiState
 import com.example.poxi.model.ToolActionInfo
+import com.example.poxi.model.VoiceSessionState
 import com.example.poxi.permission.PermissionValidationLayer
 import com.example.poxi.service.PoxiVoiceService
 import kotlinx.coroutines.delay
@@ -38,6 +39,8 @@ class PoxiViewModel @JvmOverloads constructor(
     private val _uiState = MutableStateFlow(PoxiUiState())
     val uiState: StateFlow<PoxiUiState> = _uiState.asStateFlow()
 
+    private var autoRestartJob: kotlinx.coroutines.Job? = null
+
     init {
         // Initial permission check using strict validation layer
         val hasMicPermission = PermissionValidationLayer.hasRecordAudioPermission(context)
@@ -54,18 +57,35 @@ class PoxiViewModel @JvmOverloads constructor(
 
         // Setup Audio Playback callbacks
         voiceOutputManager.onSpeakingStarted = {
-            _uiState.update { it.copy(isSpeaking = true, statusMessage = "Poxi is speaking...") }
+            autoRestartJob?.cancel()
+            _uiState.update {
+                it.copy(
+                    sessionState = VoiceSessionState.SPEAKING,
+                    isSpeaking = true,
+                    isListening = false,
+                    isProcessing = false,
+                    statusMessage = "Poxi is speaking..."
+                )
+            }
             // Pause speech recognition while speaking to prevent self-triggering
             speechInputManager.pauseListening()
         }
 
         voiceOutputManager.onSpeakingFinished = {
-            _uiState.update { it.copy(isSpeaking = false, statusMessage = "Listening for your reply...") }
+            _uiState.update {
+                it.copy(
+                    sessionState = if (it.isVoiceSessionActive) VoiceSessionState.LISTENING else VoiceSessionState.IDLE,
+                    isSpeaking = false,
+                    statusMessage = if (it.isVoiceSessionActive) "Listening for your reply..." else "Ready"
+                )
+            }
             // Continuous session: resume listening seamlessly after Poxi finishes speaking
             if (_uiState.value.isVoiceSessionActive && !_uiState.value.isProcessing) {
-                viewModelScope.launch {
+                autoRestartJob?.cancel()
+                autoRestartJob = viewModelScope.launch {
                     delay(150)
                     if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
+                        _uiState.update { it.copy(sessionState = VoiceSessionState.LISTENING, isListening = true) }
                         speechInputManager.startListening()
                     }
                 }
@@ -80,7 +100,10 @@ class PoxiViewModel @JvmOverloads constructor(
         speechInputManager.onListeningStarted = {
             _uiState.update {
                 it.copy(
+                    sessionState = VoiceSessionState.LISTENING,
                     isListening = true,
+                    isSpeaking = false,
+                    isProcessing = false,
                     statusMessage = "Listening... speak anytime"
                 )
             }
@@ -89,14 +112,15 @@ class PoxiViewModel @JvmOverloads constructor(
         speechInputManager.onListeningFinished = {
             // Only update UI if voice session is actually inactive
             if (!_uiState.value.isVoiceSessionActive) {
-                _uiState.update { it.copy(isListening = false) }
+                _uiState.update { it.copy(sessionState = VoiceSessionState.IDLE, isListening = false) }
             }
         }
 
         speechInputManager.onSpeechTimeout = {
             // Continuous session: normal silence handled internally without toggling microphone off in UI
             if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing) {
-                viewModelScope.launch {
+                autoRestartJob?.cancel()
+                autoRestartJob = viewModelScope.launch {
                     delay(500)
                     if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking && !_uiState.value.isProcessing && !speechInputManager.isListening) {
                         speechInputManager.startListening()
@@ -230,11 +254,15 @@ class PoxiViewModel @JvmOverloads constructor(
             return
         }
 
+        autoRestartJob?.cancel()
         VoiceLogger.logSessionStart()
         _uiState.update {
             it.copy(
+                sessionState = VoiceSessionState.LISTENING,
                 isVoiceSessionActive = true,
                 isListening = true,
+                isSpeaking = false,
+                isProcessing = false,
                 showPermissionDeniedDialog = false,
                 statusMessage = "Listening... speak anytime"
             )
@@ -252,37 +280,44 @@ class PoxiViewModel @JvmOverloads constructor(
             return
         }
 
+        autoRestartJob?.cancel()
         VoiceLogger.logSessionStop()
         _uiState.update {
             it.copy(
+                sessionState = VoiceSessionState.STOPPING,
                 isVoiceSessionActive = false,
                 isListening = false,
                 isSpeaking = false,
+                isProcessing = false,
                 audioAmplitude = 0f,
                 statusMessage = "Voice session stopped • Tap mic to start"
             )
         }
         speechInputManager.stopListening()
-        voiceOutputManager.stop()
+        voiceOutputManager.stop(notifyFinished = false)
         PoxiVoiceService.stop(context)
+        _uiState.update { it.copy(sessionState = VoiceSessionState.IDLE) }
     }
 
     /**
      * Immediately silences Poxi when user interrupts, and immediately re-arms the mic.
      */
     fun interruptSpeaking() {
+        autoRestartJob?.cancel()
         VoiceLogger.logUserInterrupted()
-        voiceOutputManager.stop()
+        voiceOutputManager.stop(notifyFinished = false)
         _uiState.update {
             it.copy(
+                sessionState = if (it.isVoiceSessionActive) VoiceSessionState.LISTENING else VoiceSessionState.IDLE,
                 isSpeaking = false,
                 statusMessage = "Listening for your command..."
             )
         }
         if (_uiState.value.isVoiceSessionActive) {
-            viewModelScope.launch {
+            autoRestartJob = viewModelScope.launch {
                 delay(100)
                 if (_uiState.value.isVoiceSessionActive && !_uiState.value.isSpeaking) {
+                    _uiState.update { it.copy(sessionState = VoiceSessionState.LISTENING, isListening = true) }
                     speechInputManager.startListening()
                 }
             }
@@ -294,7 +329,9 @@ class PoxiViewModel @JvmOverloads constructor(
         if (trimmed.isBlank()) return
 
         // If currently speaking, stop immediately
-        voiceOutputManager.stop()
+        autoRestartJob?.cancel()
+        voiceOutputManager.stop(notifyFinished = false)
+        speechInputManager.pauseListening()
 
         // Append user message
         val userMsg = ChatMessage(
@@ -304,8 +341,11 @@ class PoxiViewModel @JvmOverloads constructor(
 
         _uiState.update { state ->
             state.copy(
+                sessionState = VoiceSessionState.PROCESSING,
                 messages = state.messages + userMsg,
                 isProcessing = true,
+                isListening = false,
+                isSpeaking = false,
                 statusMessage = "Poxi is thinking..."
             )
         }

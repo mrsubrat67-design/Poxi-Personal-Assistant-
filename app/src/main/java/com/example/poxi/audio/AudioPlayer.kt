@@ -100,7 +100,7 @@ class AudioPlayer(private val context: Context) {
      * Prevents choppy audio or premature cutoffs by monitoring playbackHeadPosition.
      */
     fun playPcm(pcmBytes: ByteArray, sampleRate: Int = DEFAULT_SAMPLE_RATE) {
-        stop()
+        stop(notifyFinished = false)
 
         if (pcmBytes.isEmpty()) {
             return
@@ -108,12 +108,9 @@ class AudioPlayer(private val context: Context) {
 
         playbackJob = scope.launch {
             var track: AudioTrack? = null
+            var completedNaturally = false
             try {
                 requestAudioFocus()
-                isPlaying = true
-                VoiceLogger.logAudioOutputStart()
-
-                withContext(Dispatchers.Main) { onPlaybackStarted?.invoke() }
 
                 val minBufferSize = AudioTrack.getMinBufferSize(
                     sampleRate,
@@ -167,6 +164,11 @@ class AudioPlayer(private val context: Context) {
                     return@launch
                 }
 
+                // Strictly report speaking only AFTER audio is verified to be playing
+                isPlaying = true
+                VoiceLogger.logAudioOutputStart()
+                withContext(Dispatchers.Main) { onPlaybackStarted?.invoke() }
+
                 val totalFrames = pcmBytes.size / 2 // 16-bit mono = 2 bytes per frame
                 val chunkSize = 2048
                 var offset = 0
@@ -205,18 +207,22 @@ class AudioPlayer(private val context: Context) {
                     delay(30)
                 }
 
+                if (isActive && isPlaying) {
+                    completedNaturally = true
+                }
+
             } catch (e: Exception) {
                 Log.e(TAG, "Error playing PCM audio: ${e.javaClass.simpleName}: ${e.message}", e)
             } finally {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                     withContext(Dispatchers.Main) {
                         cleanupTrack(track)
-                        val shouldNotifyFinished = isPlaying
+                        val wasPlaying = isPlaying
                         isPlaying = false
                         abandonAudioFocus()
                         VoiceLogger.logAudioOutputStop()
                         onAmplitudeUpdated?.invoke(0f)
-                        if (shouldNotifyFinished) {
+                        if (wasPlaying && completedNaturally) {
                             onPlaybackFinished?.invoke()
                         }
                     }
@@ -229,7 +235,7 @@ class AudioPlayer(private val context: Context) {
      * Plays compressed audio like MP3/WAV if returned by fallback sources.
      */
     fun playEncodedAudio(audioBytes: ByteArray, extension: String = "mp3") {
-        stop()
+        stop(notifyFinished = false)
 
         playbackJob = scope.launch(Dispatchers.IO) {
             try {
@@ -294,7 +300,7 @@ class AudioPlayer(private val context: Context) {
     /**
      * Instantly stops any ongoing audio playback (Interruption support).
      */
-    fun stop() {
+    fun stop(notifyFinished: Boolean = false) {
         val wasPlaying = isPlaying
         isPlaying = false
         playbackJob?.cancel()
@@ -317,7 +323,9 @@ class AudioPlayer(private val context: Context) {
 
         if (wasPlaying) {
             VoiceLogger.logAudioOutputStop()
-            onPlaybackFinished?.invoke()
+            if (notifyFinished) {
+                onPlaybackFinished?.invoke()
+            }
         }
     }
 }

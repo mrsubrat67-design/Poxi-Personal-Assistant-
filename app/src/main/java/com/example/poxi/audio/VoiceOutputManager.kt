@@ -94,7 +94,7 @@ class VoiceOutputManager(
      * falls back to the unified local voice engine only when audio bytes are absent.
      */
     fun speak(text: String, audioBytes: ByteArray? = null, languageHint: String? = null) {
-        stop()
+        stop(notifyFinished = false)
 
         if (audioBytes != null && audioBytes.isNotEmpty()) {
             // Native Gemini Live voice pipeline
@@ -102,17 +102,21 @@ class VoiceOutputManager(
         } else {
             // Unified local voice fallback
             if (isTtsReady && tts != null && text.isNotBlank()) {
-                // If text contains pure Devanagari script, switch gently to hi-IN, else keep en-IN
                 val isDevanagari = text.any { it in '\u0900'..'\u097F' }
-                if (isDevanagari) {
+                val targetLocale = if (isDevanagari) Locale.forLanguageTag("hi-IN") else Locale.forLanguageTag("en-IN")
+                try {
+                    val availability = tts?.isLanguageAvailable(targetLocale) ?: TextToSpeech.LANG_NOT_SUPPORTED
+                    if (availability >= TextToSpeech.LANG_AVAILABLE) {
+                        tts?.language = targetLocale
+                    } else {
+                        tts?.language = Locale.ENGLISH
+                    }
+                } catch (_: Exception) {
                     try {
-                        tts?.language = Locale.forLanguageTag("hi-IN")
-                    } catch (_: Exception) {}
-                } else {
-                    try {
-                        tts?.language = Locale.forLanguageTag("en-IN")
+                        tts?.language = Locale.ENGLISH
                     } catch (_: Exception) {}
                 }
+
                 try {
                     val result = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "poxi_voice_${System.currentTimeMillis()}")
                     if (result != TextToSpeech.SUCCESS) {
@@ -133,10 +137,10 @@ class VoiceOutputManager(
     /**
      * Immediately silences and halts speech (interruption support).
      */
-    fun stop() {
-        val wasAudioPlaying = audioPlayer.isPlaying
+    fun stop(notifyFinished: Boolean = false) {
         val wasTtsSpeaking = tts?.isSpeaking == true
-        audioPlayer.stop()
+        val wasAudioPlaying = audioPlayer.isPlaying
+        audioPlayer.stop(notifyFinished = notifyFinished)
         try {
             if (wasTtsSpeaking) {
                 tts?.stop()
@@ -145,16 +149,16 @@ class VoiceOutputManager(
             Log.e(TAG, "Error stopping TTS", e)
         }
 
-        // audioPlayer.stop() already invokes audioPlayer.onPlaybackFinished (which calls onSpeakingFinished)
-        // If only TTS was speaking without AudioPlayer, notify onSpeakingFinished here
-        if (wasTtsSpeaking && !wasAudioPlaying) {
+        if (wasTtsSpeaking || (notifyFinished && !wasAudioPlaying)) {
             VoiceLogger.logAudioOutputStop()
-            onSpeakingFinished?.invoke()
+            if (notifyFinished) {
+                onSpeakingFinished?.invoke()
+            }
         }
     }
 
     fun shutdown() {
-        stop()
+        stop(notifyFinished = false)
         try {
             tts?.shutdown()
         } catch (_: Exception) {}

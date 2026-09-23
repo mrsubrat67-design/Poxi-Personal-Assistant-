@@ -23,7 +23,7 @@ object LanguageDetector {
 
     private val HINGLISH_TOKENS = setOf(
         "kholo", "khol", "karo", "kar", "karta", "karti", "karte",
-        "hai", "hain", "hoon", "hun", "ho", "tha", "thi", "the",
+        "hai", "hain", "hoon", "hun", "ho", "tha", "thi", "thay",
         "aap", "tum", "mera", "meri", "mere", "hamara", "hum",
         "kaise", "kaisa", "kaisi", "batao", "bataiye", "bata",
         "chal", "chalao", "chala", "lagao", "laga", "laga do",
